@@ -50,7 +50,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         PredTicks = 47,
         Hitchance_Accuracy = 10,
         StrafePrediction = true,
-        StrafeSamples = 15,
+        StrafeSamples = 4,
         Aim_Modes = {
             Leading = true,
             trailing = false,
@@ -114,6 +114,9 @@ local lastPosition = {}
 local priorPrediction = {}
 local vPath = {}
 
+local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
+local strafeAngleHistories = {}
+
 ---@param me WPlayer
 local function CalcStrafe(me)
     local players = entities.FindByClass("CTFPlayer")
@@ -121,14 +124,21 @@ local function CalcStrafe(me)
     -- Initialize tables if they are not already initialized
     lastAngles = lastAngles or {}
     strafeAngles = strafeAngles or {}
+    strafeAngleHistories = strafeAngleHistories or {}
 
     for idx, entity in ipairs(players) do
         -- Reset angle for dormant or dead players and teammates
         if entity:IsDormant() or not entity:IsAlive() or entity:GetTeamNumber() == me:GetTeamNumber() then
             lastAngles[idx] = nil
             strafeAngles[idx] = nil
+            strafeAngleHistories[idx] = nil
         else
-            local angle = entity:EstimateAbsVelocity():Angles() --get angle of velocity vector
+            local angle = entity:EstimateAbsVelocity():Angles() -- get angle of velocity vector
+
+            -- Initialize angle history for the player if needed
+            if strafeAngleHistories[idx] == nil then
+                strafeAngleHistories[idx] = {}
+            end
 
             -- Player doesn't have a last angle
             if lastAngles[idx] == nil then
@@ -137,7 +147,19 @@ local function CalcStrafe(me)
                 -- Calculate the delta angle
                 if angle.y ~= lastAngles[idx].y then
                     local delta = Math.NormalizeAngle(angle.y - lastAngles[idx].y)
-                    strafeAngles[idx] = math.clamp(delta, -5, 5)
+
+                    -- Update the angle history
+                    table.insert(strafeAngleHistories[idx], delta)
+                    if #strafeAngleHistories[idx] > MAX_ANGLE_HISTORY then
+                        table.remove(strafeAngleHistories[idx], 1)
+                    end
+
+                    -- Calculate the average strafe angle
+                    local sum = 0
+                    for _, pastDelta in ipairs(strafeAngleHistories[idx]) do
+                        sum = sum + pastDelta
+                    end
+                    strafeAngles[idx] = sum / #strafeAngleHistories[idx]
                 else
                     strafeAngles[idx] = 0  -- Reset the strafe angle if there is no change
                 end
@@ -146,9 +168,61 @@ local function CalcStrafe(me)
         end
     end
 end
+-- Clamp function
+local function clamp(a, b, c)
+    return (a < b) and b or (a > c) and c or a
+end
+
+--[[local function GetProjectileInformation(ent, is_ducking, case)
+    local m_flChargeBeginTime = (ent:GetPropFloat("PipebombLauncherLocalData", "m_flChargeBeginTime") or 0)
+    if m_flChargeBeginTime ~= 0 then
+        m_flChargeBeginTime = globals.CurTime() - m_flChargeBeginTime
+    end
+    
+    local vecOffset, vecMaxs, velForward
+
+    if case == -1 then  -- RocketLauncher, DragonsFury, Pomson, Bison
+        vecOffset, vecMaxs = Vector3(23.5, -8, is_ducking and 8 or -3), Vector3(1, 1, 1)
+        velForward = 1200
+    elseif case == 1 then  -- StickyBomb
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 900 + clamp(m_flChargeBeginTime / 4, 0, 1) * 1500
+    elseif case == 2 then  -- QuickieBomb
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 900 + clamp(m_flChargeBeginTime / 1.2, 0, 1) * 1500
+    elseif case == 3 then  -- ScottishResistance, StickyJumper
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 900 + clamp(m_flChargeBeginTime / 4, 0, 1) * 1500
+    elseif case == 4 then  -- TheIronBomber
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 1200
+    elseif case == 5 then  -- GrenadeLauncher, LochnLoad
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 1200
+    elseif case == 6 then  -- LooseCannon
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(3, 3, 3)
+        velForward = 1440
+    elseif case == 7 then  -- Huntsman
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(1, 1, 1)
+        velForward = 1800 + clamp(m_flChargeBeginTime, 0, 1) * 800
+    elseif case == 8 then  -- FlareGuns
+        vecOffset, vecMaxs = Vector3(23.5, 12, is_ducking and 8 or -3), Vector3(1, 1, 1)
+        velForward = 2000
+    elseif case == 9 then  -- CrusadersCrossbow, RescueRanger
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(2, 2, 2)
+        velForward = 2400
+    elseif case == 10 then  -- SyringeGuns
+        vecOffset, vecMaxs = Vector3(16, 8, -6), Vector3(1, 1, 1)
+        velForward = 1000
+    else
+        return nil
+    end
+
+    return vecOffset, vecMaxs, velForward
+end]]
+
 
 local M_RADPI = 180 / math.pi
-
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
 ---@param dest Vector3
@@ -184,34 +258,39 @@ end
 
 -- Assuming GetLocalPlayer() returns the local player entity object
 -- Assuming Vector3 is a 3D vector class
-
-function GetProjectileFireSetup(player, vecOffset, isAlternative, distance)
+function GetProjectileFireSetup(player, vecOffset, isAlternative)
+    -- Get eye position of the player
     local eyePos = player:GetAbsOrigin() + player:GetPropVector("localdata", "m_vecViewOffset[0]")
-    local forward, right, up = player:EyeAngles():AngleVectors()
     
+    -- Get the forward, right, and up vectors based on view angles
+    local forward, right, up = engine.GetViewAngles():Forward(), engine.GetViewAngles():Right(), engine.GetViewAngles():Up()
+    
+    -- Apply ducking offset if player is ducking
     if player:GetPropInt("m_fFlags") & FL_DUCKING then
         vecOffset = vecOffset * 0.75
     end
 
-    local isRight = true -- Assuming the weapon is on the right side by default
+    -- Handle alternative firing modes (e.g., left-handed or right-handed)
+    local isRight = true  -- Assuming the weapon is on the right side by default
     if isAlternative then
         isRight = not isRight
     end
     
+    -- Flip the y-coordinate offset if the weapon is on the left side
     if not isRight then
         vecOffset.y = -vecOffset.y
     end
 
+    -- Calculate the starting position for the projectile
     local startPos = Vector3(
         eyePos.x + forward.x * vecOffset.x + right.x * vecOffset.y + up.x * vecOffset.z,
         eyePos.y + forward.y * vecOffset.x + right.y * vecOffset.y + up.y * vecOffset.z,
         eyePos.z + forward.z * vecOffset.x + right.z * vecOffset.y + up.z * vecOffset.z
     )
 
-    local endPos = eyePos + forward * distance
-
-    return startPos, endPos
+    return startPos
 end
+
 
 local function calculateHitChancePercentage(lastPredictedPos, currentPos)
     if not lastPredictedPos then
@@ -238,7 +317,6 @@ local function calculateHitChancePercentage(lastPredictedPos, currentPos)
         return overallHitChance
     end
 end
-
 
 -- Constants
 local FORWARD_COLLISION_ANGLE = 55
@@ -279,7 +357,10 @@ local shouldPredict = true
 -- Main function
 local function CheckProjectileTarget(me, weapon, player)
     local tick_interval = globals.TickInterval()
-    local shootPos = me:GetEyePos()
+
+    local shootPos = GetProjectileFireSetup(me, Vector3(23.5, 12, -3))
+    --shootpos1 = shootPos
+
     local aimPos = player:GetAbsOrigin() + Vector3(0, 0, 10)
     local aimOffset = aimPos - player:GetAbsOrigin()
     local gravity = client.GetConVar("sv_gravity")
@@ -476,20 +557,6 @@ local function OnCreateMove(userCmd)
     local weapon = me:GetActiveWeapon()
     if not weapon then return end
 
-    -- Check if we can shoot if not reload weapon
-    --local flCurTime = globals.CurTime()
-    --[[local canShoot = me:GetNextAttack() <= flCurTime
-    if canShoot then
-        if client.GetConVar("cl_autoreload") == 1 then
-            client.Command("cl_autoreload 0", true)
-        end
-    else
-        if client.GetConVar("cl_autoreload") == 0 then
-            client.Command("cl_autoreload 1", true)
-        end
-        return
-    end]]
-
     -- Get current latency
     local latIn, latOut = clientstate.GetLatencyIn(), clientstate.GetLatencyOut()
     latency = (latIn or 0) + (latOut or 0)
@@ -534,7 +601,6 @@ local function OnCreateMove(userCmd)
         end
     end
     currentTarget = nil
-    targetFound = nil
 end
 
 local function convertPercentageToRGB(percentage)
@@ -684,7 +750,7 @@ local function OnDraw()
         
                     if screenPos1 ~= nil and screenPos2 ~= nil then
                         local width = draw.GetTextSize(math.floor(hitChance))
-                        draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2], math.floor(hitChance))
+                        --draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2], math.floor(hitChance))
                     end
                 end
             end
@@ -719,14 +785,14 @@ local function OnDraw()
         draw.Text(20, 280, string.format("%.2f", hitChance) .. "% Hitchance")
     end
     
-    --[[if Menu.Visuals.VisualizeProjectile then
-    draw predicted local position with strafe prediction
-        local screenPos = client.WorldToScreen(lastPosition[1])
+    --if Menu.Visuals.VisualizeProjectile then
+    --draw predicted local position with strafe prediction
+        local screenPos = client.WorldToScreen(shootpos1)
         if screenPos ~= nil then
             draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
             draw.Line( screenPos[1], screenPos[2] - 10, screenPos[1], screenPos[2] + 10)
         end
-    end]]
+    --end
 
     if Lbox_Menu_Open == true and ImMenu.Begin("Custom Projectile Aimbot", true) then -- managing the menu
         --local menuWidth, menuHeight = 2500, 3000
@@ -792,6 +858,12 @@ local function OnDraw()
             ImMenu.BeginFrame(1)
             Menu.Advanced.Hitchance_Accuracy = ImMenu.Slider("Accuracy", Menu.Advanced.Hitchance_Accuracy , 1, Menu.Advanced.PredTicks)
             ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
+            Menu.Advanced.StrafeSamples = ImMenu.Slider("Strafe Samples", Menu.Advanced.StrafeSamples , 2, 49)
+            ImMenu.EndFrame()
+
+
 
             --[[ImMenu.BeginFrame(1)
             ImMenu.Text("Aim Mode")
