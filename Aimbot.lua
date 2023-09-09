@@ -47,7 +47,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     },
 
     Advanced = {
-        PredTicks = 47,
+        PredTicks = 77,
         Hitchance_Accuracy = 10,
         StrafePrediction = true,
         StrafeSamples = 4,
@@ -113,61 +113,60 @@ local hitChance = 0
 local lastPosition = {}
 local priorPrediction = {}
 local vPath = {}
-
 local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
-local strafeAngleHistories = {}
+local MAX_CENTER_HISTORY = 5 -- Maximum number of center samples to consider for smoothing
+
+local strafeAngleHistories = {} -- History of strafe angles for each player
+local centerHistories = {} -- History of center directions for each player
 
 ---@param me WPlayer
 local function CalcStrafe(me)
     local players = entities.FindByClass("CTFPlayer")
 
-    -- Initialize tables if they are not already initialized
-    lastAngles = lastAngles or {}
-    strafeAngles = strafeAngles or {}
-    strafeAngleHistories = strafeAngleHistories or {}
-
     for idx, entity in ipairs(players) do
-        -- Reset angle for dormant or dead players and teammates
+        -- Reset data for dormant or dead players and teammates
         if entity:IsDormant() or not entity:IsAlive() or entity:GetTeamNumber() == me:GetTeamNumber() then
-            lastAngles[idx] = nil
-            strafeAngles[idx] = nil
             strafeAngleHistories[idx] = nil
+            centerHistories[idx] = nil
         else
             local angle = entity:EstimateAbsVelocity():Angles() -- get angle of velocity vector
 
             -- Initialize angle history for the player if needed
-            if strafeAngleHistories[idx] == nil then
-                strafeAngleHistories[idx] = {}
+            strafeAngleHistories[idx] = strafeAngleHistories[idx] or {}
+            centerHistories[idx] = centerHistories[idx] or {}
+
+            -- Calculate the delta angle
+            local delta = angle.y - (strafeAngleHistories[idx][#strafeAngleHistories[idx]] or 0)
+            delta = Math.NormalizeAngle(delta)
+
+            -- Update the angle history
+            table.insert(strafeAngleHistories[idx], angle.y)
+            if #strafeAngleHistories[idx] > MAX_ANGLE_HISTORY then
+                table.remove(strafeAngleHistories[idx], 1)
             end
 
-            -- Player doesn't have a last angle
-            if lastAngles[idx] == nil then
-                lastAngles[idx] = angle
-            else
-                -- Calculate the delta angle
-                if angle.y ~= lastAngles[idx].y then
-                    local delta = Math.NormalizeAngle(angle.y - lastAngles[idx].y)
+            -- Calculate the center direction based on recent strafe angles
+            if #strafeAngleHistories[idx] >= 3 then
+                local center = angle.y  -- Use the most recent angle as the center
+                table.insert(centerHistories[idx], center)
 
-                    -- Update the angle history
-                    table.insert(strafeAngleHistories[idx], delta)
-                    if #strafeAngleHistories[idx] > MAX_ANGLE_HISTORY then
-                        table.remove(strafeAngleHistories[idx], 1)
-                    end
-
-                    -- Calculate the average strafe angle
-                    local sum = 0
-                    for _, pastDelta in ipairs(strafeAngleHistories[idx]) do
-                        sum = sum + pastDelta
-                    end
-                    strafeAngles[idx] = sum / #strafeAngleHistories[idx]
-                else
-                    strafeAngles[idx] = 0  -- Reset the strafe angle if there is no change
+                if #centerHistories[idx] > MAX_CENTER_HISTORY then
+                    table.remove(centerHistories[idx], 1)
                 end
-                lastAngles[idx] = angle
+
+                -- Use the most recent center direction
+                local mostRecentCenter = centerHistories[idx][#centerHistories[idx]]
+
+                -- Do something with mostRecentCenter
             end
         end
     end
 end
+
+
+
+
+
 -- Clamp function
 local function clamp(a, b, c)
     return (a < b) and b or (a > c) and c or a
@@ -220,44 +219,95 @@ end
 
     return vecOffset, vecMaxs, velForward
 end]]
-
-
 local M_RADPI = 180 / math.pi
+local NORMAL_TRACE_HULL_SIZE = 4  -- Normal hitbox size for projectiles
+local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ballistic missiles
+
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
 ---@param dest Vector3
 ---@param speed number
 ---@param gravity number
+---@param sv_gravity number
 ---@return { angles: EulerAngles, time : number }?
-local function SolveProjectile(origin, dest, speed, gravity)
-    local _, sv_gravity = client.GetConVar("sv_gravity")
+local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target)
     local v = dest - origin
     local v0 = speed
     local v0_squared = v0 * v0  -- Calculate v0^2 once to avoid repeated calculations
-
     local g = sv_gravity * gravity
+
+    local normalHitbox = { Vector3(-NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE), Vector3(NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE) }
+    local largeHitbox = { Vector3(-LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE), Vector3(LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE) }
+    local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+
     if g == 0 then
+        if trace.entity == target and trace.endpos == dest then
+            return nil
+        end
+        if not Helpers.VisPos(target:Unwrap(), origin, dest) then return nil end
         return { angles = Math.PositionAngles(origin, dest), time = v:Length() / v0 }
+    else
+        trace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
+        if not trace.entity == target and trace.endpos == dest then
+            local dx = v:Length2D()
+            local dy = v.z
+            local g_dx = g * dx
+            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
+            local root = v0_squared * v0_squared - root_part
+
+            if root < 0 then return nil end
+
+            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
+            local yaw = math.atan(v.y, v.x)
+
+            if pitch ~= pitch or yaw ~= yaw then return nil end
+
+            local timeToTarget = dx / (math.cos(pitch) * v0)
+            local tickInterval = globals.TickInterval()
+            local numTicks = math.floor(timeToTarget / tickInterval)
+            local pos = origin
+
+            for i = 1, numTicks do
+                local t = i * tickInterval
+                local x = v0 * math.cos(pitch) * t
+                local y = v0 * math.sin(pitch) * t - 0.5 * g * t * t
+                local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
+
+                trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+                if not trace.entity == target and trace.endpos == dest then
+                    return nil
+                end
+
+                pos = newPos
+            end
+
+            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget }
+        else
+            local dx = v:Length2D()
+            local dy = v.z
+            local g_dx = g * dx
+            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
+            local root = v0_squared * v0_squared - root_part
+
+            if root < 0 then return nil end
+
+            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
+            local yaw = math.atan(v.y, v.x)
+
+            if pitch ~= pitch or yaw ~= yaw then return nil end
+
+            local timeToTarget = dx / (math.cos(pitch) * v0)
+            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget }
+        end
     end
-
-    local dx = v:Length2D()
-    local dy = v.z
-    local g_dx = g * dx  -- Precompute g * dx
-    local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-    local root = v0_squared * v0_squared - root_part
-
-    if root < 0 then return nil end
-
-    local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
-    local yaw = math.atan(v.y, v.x)
-
-    if pitch ~= pitch or yaw ~= yaw then return nil end  -- Inline NaN check
-
-    return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = dx / (math.cos(pitch) * v0) }
 end
 
+
+
+
+
 -- Assuming GetLocalPlayer() returns the local player entity object
--- Assuming Vector3 is a 3D vector class
+--[[ Assuming Vector3 is a 3D vector class
 function GetProjectileFireSetup(player, vecOffset, isAlternative)
     -- Get eye position of the player
     local eyePos = player:GetAbsOrigin() + player:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -289,7 +339,7 @@ function GetProjectileFireSetup(player, vecOffset, isAlternative)
     )
 
     return startPos
-end
+end]]
 
 
 local function calculateHitChancePercentage(lastPredictedPos, currentPos)
@@ -357,10 +407,7 @@ local shouldPredict = true
 -- Main function
 local function CheckProjectileTarget(me, weapon, player)
     local tick_interval = globals.TickInterval()
-
-    local shootPos = GetProjectileFireSetup(me, Vector3(23.5, 12, -3))
-    --shootpos1 = shootPos
-
+    local shootPos = me:GetEyePos()
     local aimPos = player:GetAbsOrigin() + Vector3(0, 0, 10)
     local aimOffset = aimPos - player:GetAbsOrigin()
     local gravity = client.GetConVar("sv_gravity")
@@ -380,7 +427,6 @@ local function CheckProjectileTarget(me, weapon, player)
     local PredTicks = Menu.Advanced.PredTicks
     local speed = projInfo[1]
     if me:DistTo(player) > PredTicks * speed then return nil end
-    if not Helpers.VisPos(player:Unwrap(), shootPos, player:GetAbsOrigin()) then return nil end
 
     local targetAngles, fov
 
@@ -445,7 +491,7 @@ local function CheckProjectileTarget(me, weapon, player)
             end
         end
 
-        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2])
+        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player)
         if not solution then goto continue end
 
         fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
@@ -454,9 +500,7 @@ local function CheckProjectileTarget(me, weapon, player)
         local time = solution.time + latency + lerp
         local ticks = Conversion.Time_to_Ticks(time) + 1
         if ticks > i then goto continue end
-
-        if not Helpers.VisPos(player:Unwrap(), shootPos, pos) then goto continue end
-
+        
         targetAngles = solution.angles
         break
         ::continue::
@@ -505,17 +549,15 @@ local function GetBestTarget(me, weapon)
     local players = entities.FindByClass("CTFPlayer")
     local bestTarget = nil
     local bestFov = 360
-    if #players == 1 then return nil end
 
     for _, player in pairs(players) do
         if player == nil or not player:IsAlive()
         or player:IsDormant()
-        or not Helpers.VisPos(player, me:GetAbsOrigin()+Vector3(0,0,75), player:GetAbsOrigin())
         or player == me or player:GetTeamNumber() == me:GetTeamNumber()
         or gui.GetValue("ignore cloaked") == 1 and player:InCond(4) then
             goto continue
         end
-
+        
         local angles = Math.PositionAngles(me:GetAbsOrigin(), player:GetAbsOrigin())
         local fov = Math.AngleFov(angles, engine.GetViewAngles())
         
@@ -786,13 +828,13 @@ local function OnDraw()
     end
     
     --if Menu.Visuals.VisualizeProjectile then
-    --draw predicted local position with strafe prediction
+    --[[draw predicted local position with strafe prediction
         local screenPos = client.WorldToScreen(shootpos1)
         if screenPos ~= nil then
             draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
             draw.Line( screenPos[1], screenPos[2] - 10, screenPos[1], screenPos[2] + 10)
         end
-    --end
+    --end]]
 
     if Lbox_Menu_Open == true and ImMenu.Begin("Custom Projectile Aimbot", true) then -- managing the menu
         --local menuWidth, menuHeight = 2500, 3000
@@ -831,8 +873,16 @@ local function OnDraw()
             ImMenu.Text("The menu key is INSERT and the aim key is MOUSE4")
             ImMenu.EndFrame()
 
-            ImMenu.BeginFrame(1)
+            --[[ImMenu.BeginFrame(1)
             Menu.Main.Active = ImMenu.Checkbox("Active", Menu.Main.Active)
+            ImMenu.EndFrame()]]
+
+            ImMenu.BeginFrame(1)
+            Menu.Main.Silent = ImMenu.Checkbox("Silent", Menu.Main.Silent)
+            ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
+            Menu.Main.AutoShoot = ImMenu.Checkbox("AutoShoot", Menu.Main.AutoShoot)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
@@ -843,10 +893,6 @@ local function OnDraw()
             Menu.Main.MinHitchance = ImMenu.Slider("Min Hitchance", Menu.Main.MinHitchance , 1, 100)
             ImMenu.EndFrame()
 
-            ImMenu.BeginFrame(1)
-            Menu.Main.Silent = ImMenu.Checkbox("Silent", Menu.Main.Silent)
-            ImMenu.EndFrame()
-
             --[[ImMenu.BeginFrame(1)
             ImMenu.Text("Hitbox")
             Menu.Main.AimPos.projectile = ImMenu.Option(Menu.Main.AimPos.projectile, Hitbox)
@@ -854,6 +900,14 @@ local function OnDraw()
         end
 
         if Menu.tabs.Advanced then
+
+            ImMenu.BeginFrame(1)
+            Menu.Advanced.StrafePrediction = ImMenu.Checkbox("Strafe Pred", Menu.Advanced.StrafePrediction)
+            ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
+            Menu.Advanced.PredTicks = ImMenu.Slider("PredTicks", Menu.Advanced.PredTicks , 1, 200)
+            ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
             Menu.Advanced.Hitchance_Accuracy = ImMenu.Slider("Accuracy", Menu.Advanced.Hitchance_Accuracy , 1, Menu.Advanced.PredTicks)
