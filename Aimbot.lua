@@ -47,7 +47,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     },
 
     Advanced = {
-        PredTicks = 77,
+        PredTicks = 47,
         Hitchance_Accuracy = 10,
         StrafePrediction = true,
         StrafeSamples = 4,
@@ -62,10 +62,12 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         Active = true,
         VisualizePath = true,
         Path_styles = {"Line", "Alt Line", "Dashed"},
-        Path_styles_selected = 2,
-        VisualizeHitchance = true,
+        Path_styles_selected = 1,
+        VisualizeHitchance = false,
         VisualizeProjectile = false,
         VisualizeHitPos = false,
+        Crosshair = false,
+        NccPred = false
     },
 }
 
@@ -113,60 +115,61 @@ local hitChance = 0
 local lastPosition = {}
 local priorPrediction = {}
 local vPath = {}
-local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
-local MAX_CENTER_HISTORY = 5 -- Maximum number of center samples to consider for smoothing
 
-local strafeAngleHistories = {} -- History of strafe angles for each player
-local centerHistories = {} -- History of center directions for each player
+local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
+local strafeAngleHistories = {}
 
 ---@param me WPlayer
 local function CalcStrafe(me)
     local players = entities.FindByClass("CTFPlayer")
 
+    -- Initialize tables if they are not already initialized
+    lastAngles = lastAngles or {}
+    strafeAngles = strafeAngles or {}
+    strafeAngleHistories = strafeAngleHistories or {}
+
     for idx, entity in ipairs(players) do
-        -- Reset data for dormant or dead players and teammates
+        -- Reset angle for dormant or dead players and teammates
         if entity:IsDormant() or not entity:IsAlive() or entity:GetTeamNumber() == me:GetTeamNumber() then
+            lastAngles[idx] = nil
+            strafeAngles[idx] = nil
             strafeAngleHistories[idx] = nil
-            centerHistories[idx] = nil
         else
             local angle = entity:EstimateAbsVelocity():Angles() -- get angle of velocity vector
 
             -- Initialize angle history for the player if needed
-            strafeAngleHistories[idx] = strafeAngleHistories[idx] or {}
-            centerHistories[idx] = centerHistories[idx] or {}
-
-            -- Calculate the delta angle
-            local delta = angle.y - (strafeAngleHistories[idx][#strafeAngleHistories[idx]] or 0)
-            delta = Math.NormalizeAngle(delta)
-
-            -- Update the angle history
-            table.insert(strafeAngleHistories[idx], angle.y)
-            if #strafeAngleHistories[idx] > MAX_ANGLE_HISTORY then
-                table.remove(strafeAngleHistories[idx], 1)
+            if strafeAngleHistories[idx] == nil then
+                strafeAngleHistories[idx] = {}
             end
 
-            -- Calculate the center direction based on recent strafe angles
-            if #strafeAngleHistories[idx] >= 3 then
-                local center = angle.y  -- Use the most recent angle as the center
-                table.insert(centerHistories[idx], center)
+            -- Player doesn't have a last angle
+            if lastAngles[idx] == nil then
+                lastAngles[idx] = angle
+            else
+                -- Calculate the delta angle
+                if angle.y ~= lastAngles[idx].y then
+                    local delta = Math.NormalizeAngle(angle.y - lastAngles[idx].y)
 
-                if #centerHistories[idx] > MAX_CENTER_HISTORY then
-                    table.remove(centerHistories[idx], 1)
+                    -- Update the angle history
+                    table.insert(strafeAngleHistories[idx], delta)
+                    if #strafeAngleHistories[idx] > MAX_ANGLE_HISTORY then
+                        table.remove(strafeAngleHistories[idx], 1)
+                    end
+
+                    -- Calculate the average strafe angle
+                    local sum = 0
+                    for _, pastDelta in ipairs(strafeAngleHistories[idx]) do
+                        sum = sum + pastDelta
+                    end
+                    strafeAngles[idx] = sum / #strafeAngleHistories[idx]
+                else
+                    strafeAngles[idx] = 0  -- Reset the strafe angle if there is no change
                 end
-
-                -- Use the most recent center direction
-                local mostRecentCenter = centerHistories[idx][#centerHistories[idx]]
-
-                -- Do something with mostRecentCenter
+                lastAngles[idx] = angle
             end
         end
     end
 end
-
-
-
-
-
 -- Clamp function
 local function clamp(a, b, c)
     return (a < b) and b or (a > c) and c or a
@@ -219,95 +222,44 @@ end
 
     return vecOffset, vecMaxs, velForward
 end]]
-local M_RADPI = 180 / math.pi
-local NORMAL_TRACE_HULL_SIZE = 4  -- Normal hitbox size for projectiles
-local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ballistic missiles
 
+
+local M_RADPI = 180 / math.pi
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
 ---@param dest Vector3
 ---@param speed number
 ---@param gravity number
----@param sv_gravity number
 ---@return { angles: EulerAngles, time : number }?
-local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target)
+local function SolveProjectile(origin, dest, speed, gravity)
+    local _, sv_gravity = client.GetConVar("sv_gravity")
     local v = dest - origin
     local v0 = speed
     local v0_squared = v0 * v0  -- Calculate v0^2 once to avoid repeated calculations
+
     local g = sv_gravity * gravity
-
-    local normalHitbox = { Vector3(-NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE), Vector3(NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE) }
-    local largeHitbox = { Vector3(-LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE), Vector3(LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE) }
-    local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-
     if g == 0 then
-        if trace.entity == target and trace.endpos == dest then
-            return nil
-        end
-        if not Helpers.VisPos(target:Unwrap(), origin, dest) then return nil end
         return { angles = Math.PositionAngles(origin, dest), time = v:Length() / v0 }
-    else
-        trace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
-        if not trace.entity == target and trace.endpos == dest then
-            local dx = v:Length2D()
-            local dy = v.z
-            local g_dx = g * dx
-            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-            local root = v0_squared * v0_squared - root_part
-
-            if root < 0 then return nil end
-
-            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
-            local yaw = math.atan(v.y, v.x)
-
-            if pitch ~= pitch or yaw ~= yaw then return nil end
-
-            local timeToTarget = dx / (math.cos(pitch) * v0)
-            local tickInterval = globals.TickInterval()
-            local numTicks = math.floor(timeToTarget / tickInterval)
-            local pos = origin
-
-            for i = 1, numTicks do
-                local t = i * tickInterval
-                local x = v0 * math.cos(pitch) * t
-                local y = v0 * math.sin(pitch) * t - 0.5 * g * t * t
-                local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
-
-                trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-                if not trace.entity == target and trace.endpos == dest then
-                    return nil
-                end
-
-                pos = newPos
-            end
-
-            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget }
-        else
-            local dx = v:Length2D()
-            local dy = v.z
-            local g_dx = g * dx
-            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-            local root = v0_squared * v0_squared - root_part
-
-            if root < 0 then return nil end
-
-            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
-            local yaw = math.atan(v.y, v.x)
-
-            if pitch ~= pitch or yaw ~= yaw then return nil end
-
-            local timeToTarget = dx / (math.cos(pitch) * v0)
-            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget }
-        end
     end
+
+    local dx = v:Length2D()
+    local dy = v.z
+    local g_dx = g * dx  -- Precompute g * dx
+    local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
+    local root = v0_squared * v0_squared - root_part
+
+    if root < 0 then return nil end
+
+    local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
+    local yaw = math.atan(v.y, v.x)
+
+    if pitch ~= pitch or yaw ~= yaw then return nil end  -- Inline NaN check
+
+    return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = dx / (math.cos(pitch) * v0) }
 end
 
-
-
-
-
 -- Assuming GetLocalPlayer() returns the local player entity object
---[[ Assuming Vector3 is a 3D vector class
+-- Assuming Vector3 is a 3D vector class
 function GetProjectileFireSetup(player, vecOffset, isAlternative)
     -- Get eye position of the player
     local eyePos = player:GetAbsOrigin() + player:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -339,7 +291,7 @@ function GetProjectileFireSetup(player, vecOffset, isAlternative)
     )
 
     return startPos
-end]]
+end
 
 
 local function calculateHitChancePercentage(lastPredictedPos, currentPos)
@@ -407,7 +359,10 @@ local shouldPredict = true
 -- Main function
 local function CheckProjectileTarget(me, weapon, player)
     local tick_interval = globals.TickInterval()
-    local shootPos = me:GetEyePos()
+
+    local shootPos = GetProjectileFireSetup(me, Vector3(23.5, 12, -3))
+    --shootpos1 = shootPos
+
     local aimPos = player:GetAbsOrigin() + Vector3(0, 0, 10)
     local aimOffset = aimPos - player:GetAbsOrigin()
     local gravity = client.GetConVar("sv_gravity")
@@ -427,6 +382,7 @@ local function CheckProjectileTarget(me, weapon, player)
     local PredTicks = Menu.Advanced.PredTicks
     local speed = projInfo[1]
     if me:DistTo(player) > PredTicks * speed then return nil end
+    if not Helpers.VisPos(player:Unwrap(), shootPos, player:GetAbsOrigin()) then return nil end
 
     local targetAngles, fov
 
@@ -491,7 +447,7 @@ local function CheckProjectileTarget(me, weapon, player)
             end
         end
 
-        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player)
+        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2])
         if not solution then goto continue end
 
         fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
@@ -500,7 +456,9 @@ local function CheckProjectileTarget(me, weapon, player)
         local time = solution.time + latency + lerp
         local ticks = Conversion.Time_to_Ticks(time) + 1
         if ticks > i then goto continue end
-        
+
+        if not Helpers.VisPos(player:Unwrap(), shootPos, pos) then goto continue end
+
         targetAngles = solution.angles
         break
         ::continue::
@@ -549,15 +507,17 @@ local function GetBestTarget(me, weapon)
     local players = entities.FindByClass("CTFPlayer")
     local bestTarget = nil
     local bestFov = 360
+    if #players == 1 then return nil end
 
     for _, player in pairs(players) do
         if player == nil or not player:IsAlive()
         or player:IsDormant()
+        or not Helpers.VisPos(player, me:GetAbsOrigin()+Vector3(0,0,75), player:GetAbsOrigin())
         or player == me or player:GetTeamNumber() == me:GetTeamNumber()
         or gui.GetValue("ignore cloaked") == 1 and player:InCond(4) then
             goto continue
         end
-        
+
         local angles = Math.PositionAngles(me:GetAbsOrigin(), player:GetAbsOrigin())
         local fov = Math.AngleFov(angles, engine.GetViewAngles())
         
@@ -735,6 +695,25 @@ local function LoadCFG(folder_name)
     end
 end
 
+local hitPos = {}
+local function PlayerHurtEvent(event)
+    if (event:GetName() == 'player_hurt' ) and Menu.Visuals.VisualizeHitPos then
+        local localPlayer = entities.GetLocalPlayer();
+        local victim = entities.GetByUserID(event:GetInt("userid"))
+        local attacker = entities.GetByUserID(event:GetInt("attacker"))
+        if (attacker == nil or localPlayer:GetIndex() ~= attacker:GetIndex()) then
+            return
+        end
+        table.insert(hitPos, 1, {box = victim:HitboxSurroundingBox(), time = globals.RealTime()})
+    end
+    if #hitPos > 1 then 
+        table.remove(hitPos)
+    end
+end
+callbacks.Register("FireGameEvent", "PlayerHurtEvent", PlayerHurtEvent)
+
+local clear_lines = 0
+
 local function OnDraw()
     local PredTicks = Menu.Advanced.PredTicks
     draw.SetFont(Fonts.Verdana)
@@ -762,39 +741,114 @@ local function OnDraw()
             end
         end
     end]]
-
+    if not input.IsButtonDown( Menu.Main.AimKey ) then 
+        if (globals.RealTime() > (clear_lines + 5)) then 
+            vPath = {}
+            clear_lines = globals.RealTime() 
+        end
+    else
+        clear_lines = globals.RealTime() 
+    end
     -- Draw lines between the predicted positions
-    if Menu.Visuals.VisualizePath and vPath then
+    if Menu.Visuals.Active and vPath then
+        local startPos
         draw.SetFont(font)
         for i = 1, #vPath - 1 do
             local pos1 = vPath[i]
             local pos2 = vPath[i + 1]
-            
+
+            if i == 1 then 
+                startPos = pos1
+            end
+                
             draw.Color(255 - math.floor((hitChance / 100) * 255), math.floor((hitChance / 100) * 255), 0, 255)
-            
-            if Menu.Visuals.Path_styles_selected == 1 or Menu.Visuals.Path_styles_selected == 3 then 
-                local screenPos1 = client.WorldToScreen(pos1)
-                local screenPos2 = client.WorldToScreen(pos2)
-        
-                if screenPos1 ~= nil and screenPos2 ~= nil and (not (Menu.Visuals.Path_styles_selected == 3) or i % 2 == 1) then
-                    draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
-                end
-            end
 
-            if Menu.Visuals.Path_styles_selected == 2 then
-                L_line(pos1, pos2, 10)
-            end
-
-            if Menu.Visuals.VisualizeHitchance then 
+            if Menu.Visuals.VisualizeHitchance or Menu.Visuals.Crosshair or Menu.Visuals.NccPred then 
                 if i == #vPath - 1 then 
                     local screenPos1 = client.WorldToScreen(pos1)
                     local screenPos2 = client.WorldToScreen(pos2)
-        
+            
                     if screenPos1 ~= nil and screenPos2 ~= nil then
-                        local width = draw.GetTextSize(math.floor(hitChance))
-                        --draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2], math.floor(hitChance))
+                        if Menu.Visuals.VisualizeHitchance then
+                            local width = draw.GetTextSize(math.floor(hitChance))
+                            draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2], math.floor(hitChance))
+                        end
+                        if Menu.Visuals.Crosshair then 
+                            local c_size = 8
+                            draw.Line(screenPos2[1] - c_size, screenPos2[2], screenPos2[1] + c_size, screenPos2[2])
+                            draw.Line(screenPos2[1], screenPos2[2] - c_size, screenPos2[1], screenPos2[2] + c_size)
+                        end
+                        if Menu.Visuals.NccPred then 
+                            local c_size = 5
+                            draw.FilledRect(screenPos2[1] - c_size, screenPos2[2]  - c_size, screenPos2[1] + c_size, screenPos2[2]  + c_size)
+                            local w2s = client.WorldToScreen(startPos)
+                            if w2s then 
+                                draw.Line(w2s[1], w2s[2], screenPos2[1], screenPos2[2])
+                            end
+                        end
                     end
                 end
+            end
+
+            if Menu.Visuals.VisualizePath then
+                if Menu.Visuals.Path_styles_selected == 1 or Menu.Visuals.Path_styles_selected == 3 then 
+                    local screenPos1 = client.WorldToScreen(pos1)
+                    local screenPos2 = client.WorldToScreen(pos2)
+            
+                    if screenPos1 ~= nil and screenPos2 ~= nil and (not (Menu.Visuals.Path_styles_selected == 3) or i % 2 == 1) then
+                        draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+                    end
+                end
+    
+                if Menu.Visuals.Path_styles_selected == 2 then
+                    L_line(pos1, pos2, 10)
+                end
+            end
+        end
+        if Menu.Visuals.VisualizeHitPos then
+            for i,v in pairs(hitPos) do 
+                if globals.RealTime() - v.time > 1 then
+                    table.remove(hitPos, i)
+                else
+                    draw.Color( 255,255,255,255 )
+                    local hitboxes = v.box
+                    local min = hitboxes[1]
+                    local max = hitboxes[2]
+                    local vertices = {
+                        Vector3(min.x, min.y, min.z),
+                        Vector3(min.x, max.y, min.z),
+                        Vector3(max.x, max.y, min.z),
+                        Vector3(max.x, min.y, min.z),
+                        Vector3(min.x, min.y, max.z),
+                        Vector3(min.x, max.y, max.z),
+                        Vector3(max.x, max.y, max.z),
+                        Vector3(max.x, min.y, max.z)
+                    }
+                    local screenVertices = {}
+                    for j, vertex in ipairs(vertices) do
+                        local screenPos = client.WorldToScreen(vertex)
+                        if screenPos ~= nil then
+                            screenVertices[j] = {x = screenPos[1], y = screenPos[2]}
+                        end
+                    end
+                    for j = 1, 4 do
+                        local vertex1 = screenVertices[j]
+                        local vertex2 = screenVertices[j % 4 + 1]
+                        local vertex3 = screenVertices[j + 4]
+                        local vertex4 = screenVertices[(j + 4) % 4 + 5]
+                        if vertex1 ~= nil and vertex2 ~= nil and vertex3 ~= nil and vertex4 ~= nil then
+                            draw.Line(vertex1.x, vertex1.y, vertex2.x, vertex2.y)
+                            draw.Line(vertex3.x, vertex3.y, vertex4.x, vertex4.y)
+                        end
+                    end
+                    for j = 1, 4 do
+                        local vertex1 = screenVertices[j]
+                        local vertex2 = screenVertices[j + 4]
+                        if vertex1 ~= nil and vertex2 ~= nil then
+                            draw.Line(vertex1.x, vertex1.y, vertex2.x, vertex2.y)
+                        end
+                    end
+                end   
             end
         end
     end
@@ -811,10 +865,10 @@ local function OnDraw()
         draw.Text(20, 200, string.format("Lerp: %.2f", lerp))
 
         local me = WPlayer.GetLocal()
-        if not me or not me:IsAlive() then return end
+        if not me or not me:IsAlive() then goto continue end
 
         local weapon = me:GetActiveWeapon()
-        if not weapon then return end
+        if not weapon then goto continue end
 
             -- Draw current weapon
         draw.Text(20, 220, string.format("Weapon: %s", weapon:GetName()))
@@ -828,13 +882,14 @@ local function OnDraw()
     end
     
     --if Menu.Visuals.VisualizeProjectile then
-    --[[draw predicted local position with strafe prediction
-        local screenPos = client.WorldToScreen(shootpos1)
-        if screenPos ~= nil then
-            draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
-            draw.Line( screenPos[1], screenPos[2] - 10, screenPos[1], screenPos[2] + 10)
-        end
-    --end]]
+    --draw predicted local position with strafe prediction
+        -- local screenPos = client.WorldToScreen(shootpos1)
+        -- if screenPos ~= nil then
+        --     draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
+        --     draw.Line( screenPos[1], screenPos[2] - 10, screenPos[1], screenPos[2] + 10)
+        -- end
+    --end
+    ::continue::
 
     if Lbox_Menu_Open == true and ImMenu.Begin("Custom Projectile Aimbot", true) then -- managing the menu
         --local menuWidth, menuHeight = 2500, 3000
@@ -873,16 +928,8 @@ local function OnDraw()
             ImMenu.Text("The menu key is INSERT and the aim key is MOUSE4")
             ImMenu.EndFrame()
 
-            --[[ImMenu.BeginFrame(1)
+            ImMenu.BeginFrame(1)
             Menu.Main.Active = ImMenu.Checkbox("Active", Menu.Main.Active)
-            ImMenu.EndFrame()]]
-
-            ImMenu.BeginFrame(1)
-            Menu.Main.Silent = ImMenu.Checkbox("Silent", Menu.Main.Silent)
-            ImMenu.EndFrame()
-
-            ImMenu.BeginFrame(1)
-            Menu.Main.AutoShoot = ImMenu.Checkbox("AutoShoot", Menu.Main.AutoShoot)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
@@ -893,6 +940,10 @@ local function OnDraw()
             Menu.Main.MinHitchance = ImMenu.Slider("Min Hitchance", Menu.Main.MinHitchance , 1, 100)
             ImMenu.EndFrame()
 
+            ImMenu.BeginFrame(1)
+            Menu.Main.Silent = ImMenu.Checkbox("Silent", Menu.Main.Silent)
+            ImMenu.EndFrame()
+
             --[[ImMenu.BeginFrame(1)
             ImMenu.Text("Hitbox")
             Menu.Main.AimPos.projectile = ImMenu.Option(Menu.Main.AimPos.projectile, Hitbox)
@@ -900,14 +951,6 @@ local function OnDraw()
         end
 
         if Menu.tabs.Advanced then
-
-            ImMenu.BeginFrame(1)
-            Menu.Advanced.StrafePrediction = ImMenu.Checkbox("Strafe Pred", Menu.Advanced.StrafePrediction)
-            ImMenu.EndFrame()
-
-            ImMenu.BeginFrame(1)
-            Menu.Advanced.PredTicks = ImMenu.Slider("PredTicks", Menu.Advanced.PredTicks , 1, 200)
-            ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
             Menu.Advanced.Hitchance_Accuracy = ImMenu.Slider("Accuracy", Menu.Advanced.Hitchance_Accuracy , 1, Menu.Advanced.PredTicks)
@@ -927,16 +970,34 @@ local function OnDraw()
 
         if Menu.tabs.Visuals then 
             ImMenu.BeginFrame(1)
-            Menu.Visuals.VisualizePath = ImMenu.Checkbox("Visualize Path", Menu.Visuals.VisualizePath)
+            Menu.Visuals.Active = ImMenu.Checkbox("Enable", Menu.Visuals.Active )
             ImMenu.EndFrame()
 
-            if Menu.Visuals.VisualizePath then 
+            if  Menu.Visuals.Active then 
+                ImMenu.BeginFrame(1)
+                Menu.Visuals.VisualizePath = ImMenu.Checkbox("Visualize Path", Menu.Visuals.VisualizePath)
+                ImMenu.EndFrame()
                 ImMenu.BeginFrame(1)
                 Menu.Visuals.VisualizeHitchance = ImMenu.Checkbox("Visualize Hitchance", Menu.Visuals.VisualizeHitchance)
                 ImMenu.EndFrame()
                 ImMenu.BeginFrame(1)
-                Menu.Visuals.Path_styles_selected = ImMenu.Option(Menu.Visuals.Path_styles_selected, Menu.Visuals.Path_styles)
+                Menu.Visuals.Crosshair = ImMenu.Checkbox("Crosshair", Menu.Visuals.Crosshair)
                 ImMenu.EndFrame()
+                ImMenu.BeginFrame(1)
+                Menu.Visuals.VisualizeHitPos = ImMenu.Checkbox("Visualize Hit Pos", Menu.Visuals.VisualizeHitPos)
+                ImMenu.EndFrame()
+                ImMenu.BeginFrame(1)
+                Menu.Visuals.NccPred = ImMenu.Checkbox("Nullcore Pred Visuals", Menu.Visuals.NccPred)
+                ImMenu.EndFrame()
+
+                if Menu.Visuals.VisualizePath then 
+                    ImMenu.BeginFrame(1)
+                    ImMenu.Text("Visualize Path Settings")
+                    ImMenu.EndFrame()
+                    ImMenu.BeginFrame(1)
+                    Menu.Visuals.Path_styles_selected = ImMenu.Option(Menu.Visuals.Path_styles_selected, Menu.Visuals.Path_styles)
+                    ImMenu.EndFrame()
+                end
             end
         end
 
