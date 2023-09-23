@@ -3,12 +3,12 @@
 [![GitHub issues](https://img.shields.io/github/issues/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/issues)
 [![GitHub forks](https://img.shields.io/github/forks/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/network)
 [![GitHub stars](https://img.shields.io/github/stars/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/stargazers)
-
-[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/P_Aimbot/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/P_Aimbot/releases/latest/download/P_Aimbot)
-
 # P_Aimbot
 ## This script REQUIRES [lnxLib](https://github.com/lnx00/Lmaobox-Library/releases/latest/) and [ImMenu](https://github.com/lnx00/Lmaobox-ImMenu/blob/main/src/ImMenu.lua). It will NOT work without these two luas.
 ### Projectile aimbot lua for lmaobox.
+
+
+[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/P_Aimbot/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/P_Aimbot/releases/latest/download/Aimbot.lua)
 
 ### Features
 - Main tab
