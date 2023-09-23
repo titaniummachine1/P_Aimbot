@@ -1,3 +1,4 @@
+![](https://api.visitorbadge.io/api/VisitorHit?user=titaniummachine1&repo=P_Aimbot&countColor=%237B1E7A)
 # P_Aimbot
 ## This script REQUIRES [lnxLib](https://github.com/lnx00/Lmaobox-Library/releases/latest/) and [ImMenu](https://github.com/lnx00/Lmaobox-ImMenu/blob/main/src/ImMenu.lua). It will NOT work without these two luas.
 ### Projectile aimbot lua for lmaobox.
