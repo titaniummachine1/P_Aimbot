@@ -8,7 +8,7 @@
 ### Projectile aimbot lua for lmaobox.
 
 
-[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/P_Aimbot.svg/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/Aimbot.lua/releases/latest/download/Aimbot.lua)
+[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/P_Aimbot.svg/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/P_Aimbot/releases/latest/download/Aimbot.lua)
 
 ### Features
 - Main tab
