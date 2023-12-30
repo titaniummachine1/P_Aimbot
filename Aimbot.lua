@@ -35,7 +35,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
 
     Main = {
         Active = true,
-        AimKey = MOUSE_4,
+        AimKey = KEY_LSHIFT,
         AutoShoot = true,
         Silent = true,
         AimPos = {
@@ -103,7 +103,6 @@ local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
 local Helpers = lnxLib.TF2.Helpers
 local Prediction = lnxLib.TF2.Prediction
 local Fonts = lnxLib.UI.Fonts
-local shouldHitEntity = function (e, _) return false end
 
 local vHitbox = { Vector3(-1, -1, -1), Vector3(1, 1, 1) }
 
@@ -232,6 +231,7 @@ local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ball
 ---@param gravity number
 ---@param sv_gravity number
 ---@return { angles: EulerAngles, time : number }?
+---@param shouldHitEntity fun(entity: WEntity, contentsMask: integer): boolean?
 local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target)
     local v = dest - origin
     local v0 = speed
@@ -422,6 +422,7 @@ local function CheckProjectileTarget(me, weapon, player)
     vPath = {}
     local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), player:IsOnGround()
     local currpos
+    local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() end --trace ignore simulated player 
 
     -- Check initial conditions
     local projInfo = weapon:GetProjectileInfo()
@@ -517,7 +518,25 @@ local function CheckProjectileTarget(me, weapon, player)
     return { entity = player, angles = targetAngles, factor = fov, Prediction = vPath[#vPath] }
 end
 
+-- Finds the best position for hitscan weapons
+---@param me WPlayer
+---@param weapon WWeapon
+---@param player WPlayer
+---@return AimTarget?
+local function CheckHitscanTarget(me, weapon, player)
+    -- FOV Check
+    local aimPos = player:GetHitboxPos(Menu.Main.AimPos.Hitscan)
+    if not aimPos then return nil end
+    local angles = Math.PositionAngles(me:GetEyePos(), aimPos)
+    local fov = Math.AngleFov(angles, engine.GetViewAngles())
 
+    -- Visiblity Check
+    if not Helpers.VisPos(player:Unwrap(), me:GetEyePos(), aimPos) then return nil end
+
+    -- The target is valid
+    local target = { entity = player, angles = angles, factor = fov }
+    return target
+end
 
 -- Checks the given target for the given weapon
 ---@param me WPlayer
@@ -537,7 +556,7 @@ local function CheckTarget(me, weapon, entity)
         local projType = weapon:GetWeaponProjectileType()
         if projType == 1 then
             -- Hitscan weapon
-            return --CheckHitscanTarget(me, weapon, player)
+            return CheckHitscanTarget(me, weapon, player)
         else
             -- Projectile weapon
             return CheckProjectileTarget(me, weapon, player)
@@ -593,6 +612,7 @@ local function OnCreateMove(userCmd)
     end
 
     local me = WPlayer.GetLocal()
+    local pLocal = entities.GetLocalPlayer()
     if not me or not me:IsAlive() then return end
 
     -- Calculate strafe angles (optional)
@@ -788,8 +808,8 @@ local function OnDraw()
     end]]
 
     
-    if not input.IsButtonDown( Menu.Main.AimKey ) then 
-        if (globals.RealTime() > (clear_lines + 5)) then 
+    if not input.IsButtonDown( Menu.Main.AimKey ) then
+        if (globals.RealTime() > (clear_lines + 5)) then
             vPath = {}
             clear_lines = globals.RealTime()
         end
@@ -929,6 +949,7 @@ local function OnDraw()
         draw.Text(20, 280, string.format("%.2f", hitChance) .. "% Hitchance")
     end
     
+
     --if Menu.Visuals.VisualizeProjectile then
     --draw predicted local position with strafe prediction
         -- local screenPos = client.WorldToScreen(shootpos1)
@@ -1090,6 +1111,55 @@ local function OnDraw()
         ImMenu.End()
     end
 end
+
+local function PropUpdate()
+    local pLocal = entities.GetLocalPlayer()
+    if not input.IsButtonDown(KEY_RSHIFT) then
+        return
+    end
+    --[143 and 210 are indle for unscoped and scoped
+
+
+    for i = 1, entities.GetHighestEntityIndex() do -- index 1 is world entity
+        local entity = entities.GetByIndex( i )
+        if entity then
+            --print( i, entity:GetClass() )
+            local position = entity:GetPropVector("m_vecOrigin") -- Same assumption as above
+            entity:SetPropVector(pLocal:GetAbsOrigin(), "m_vecOrigin")
+            print(entity:GetClass(), position)
+        end
+    end
+
+    local viewmodels = entities.FindByClass("CTFViewModel")
+
+    for _, viewmodel in ipairs(viewmodels) do
+
+    end
+
+
+    local viewmodel = entities.FindByClass("CTFViewModel")[54]
+    --print(viewmodel)
+
+    --[[for i = 0, 23 do
+        pLocal:SetPropDataTableFloat(100, i, "m_flPoseParameter")
+    end]]
+    local viewmodelData =  pLocal:GetPropDataTableFloat("m_flPoseParameter") --213 reload no scope , 211 reload scope, 
+    --printLuaTable(viewmodelData)
+
+    --viewmodel:GetPropDataTableFloat("m_vecOrigin")
+    --print(viewmodel)
+
+
+    --pLocal:SetPropDataTableFloat(1000, 0, 0)    
+    --pLocal:SetPropVector(Vector3(10000, 10000, 100000), "m_bDrawViewmodel")
+ 
+    --pLocal:SetPropInt(1000, "m_Resolution")
+    --local resolution =  pLocal:GetPropVector("m_Resolution") --213 reload no scope , 211 reload scope, 
+ 
+end
+
+callbacks.Unregister("PostPropUpdate","ProjCamProp")
+callbacks.Register("PostPropUpdate","ProjCamProp", PropUpdate)
 
 callbacks.Unregister("CreateMove", "LNX.Aimbot.CreateMove")
 callbacks.Register("CreateMove", "LNX.Aimbot.CreateMove", OnCreateMove)
