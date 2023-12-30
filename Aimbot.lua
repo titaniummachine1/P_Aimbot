@@ -36,6 +36,8 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     Main = {
         Active = true,
         AimKey = KEY_LSHIFT,
+        AimkeyName = "LSHIFT",
+        Is_Listening_For_Key = false,
         AutoShoot = true,
         Silent = true,
         AimPos = {
@@ -71,6 +73,140 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     },
 }
 
+    -- Contains pairs of keys and their names
+    ---@type table<integer, string>
+    local KeyNames = {
+        [KEY_SEMICOLON] = "SEMICOLON",
+        [KEY_APOSTROPHE] = "APOSTROPHE",
+        [KEY_BACKQUOTE] = "BACKQUOTE",
+        [KEY_COMMA] = "COMMA",
+        [KEY_PERIOD] = "PERIOD",
+        [KEY_SLASH] = "SLASH",
+        [KEY_BACKSLASH] = "BACKSLASH",
+        [KEY_MINUS] = "MINUS",
+        [KEY_EQUAL] = "EQUAL",
+        [KEY_ENTER] = "ENTER",
+        [KEY_SPACE] = "SPACE",
+        [KEY_BACKSPACE] = "BACKSPACE",
+        [KEY_TAB] = "TAB",
+        [KEY_CAPSLOCK] = "CAPSLOCK",
+        [KEY_NUMLOCK] = "NUMLOCK",
+        [KEY_ESCAPE] = "ESCAPE",
+        [KEY_SCROLLLOCK] = "SCROLLLOCK",
+        [KEY_INSERT] = "INSERT",
+        [KEY_DELETE] = "DELETE",
+        [KEY_HOME] = "HOME",
+        [KEY_END] = "END",
+        [KEY_PAGEUP] = "PAGEUP",
+        [KEY_PAGEDOWN] = "PAGEDOWN",
+        [KEY_BREAK] = "BREAK",
+        [KEY_LSHIFT] = "LSHIFT",
+        [KEY_RSHIFT] = "RSHIFT",
+        [KEY_LALT] = "LALT",
+        [KEY_RALT] = "RALT",
+        [KEY_LCONTROL] = "LCONTROL",
+        [KEY_RCONTROL] = "RCONTROL",
+        [KEY_UP] = "UP",
+        [KEY_LEFT] = "LEFT",
+        [KEY_DOWN] = "DOWN",
+        [KEY_RIGHT] = "RIGHT",
+    }
+
+    -- Contains pairs of keys and their values
+    ---@type table<integer, string>
+    local KeyValues = {
+        [KEY_LBRACKET] = "[",
+        [KEY_RBRACKET] = "]",
+        [KEY_SEMICOLON] = ";",
+        [KEY_APOSTROPHE] = "'",
+        [KEY_BACKQUOTE] = "`",
+        [KEY_COMMA] = ",",
+        [KEY_PERIOD] = ".",
+        [KEY_SLASH] = "/",
+        [KEY_BACKSLASH] = "\\",
+        [KEY_MINUS] = "-",
+        [KEY_EQUAL] = "=",
+        [KEY_SPACE] = " ",
+    }
+
+local Lua__fullPath = GetScriptName()
+local Lua__fileName = Lua__fullPath:match("\\([^\\]-)$"):gsub("%.lua$", "")
+
+local function CreateCFG(folder_name, table)
+    local success, fullPath = filesystem.CreateDirectory(folder_name)
+    local filepath = tostring(fullPath .. "/config.cfg")
+    local file = io.open(filepath, "w")
+    
+    if file then
+        local function serializeTable(tbl, level)
+            level = level or 0
+            local result = string.rep("    ", level) .. "{\n"
+            for key, value in pairs(tbl) do
+                result = result .. string.rep("    ", level + 1)
+                if type(key) == "string" then
+                    result = result .. '["' .. key .. '"] = '
+                else
+                    result = result .. "[" .. key .. "] = "
+                end
+                if type(value) == "table" then
+                    result = result .. serializeTable(value, level + 1) .. ",\n"
+                elseif type(value) == "string" then
+                    result = result .. '"' .. value .. '",\n'
+                else
+                    result = result .. tostring(value) .. ",\n"
+                end
+            end
+            result = result .. string.rep("    ", level) .. "}"
+            return result
+        end
+        
+        local serializedConfig = serializeTable(table)
+        file:write(serializedConfig)
+        file:close()
+        printc( 255, 183, 0, 255, "["..os.date("%H:%M:%S").."] Saved Config to ".. tostring(fullPath))
+    end
+end
+
+local function LoadCFG(folder_name)
+    local success, fullPath = filesystem.CreateDirectory(folder_name)
+    local filepath = tostring(fullPath .. "/config.cfg")
+    local file = io.open(filepath, "r")
+
+    if file then
+        local content = file:read("*a")
+        file:close()
+        local chunk, err = load("return " .. content)
+        if chunk then
+            printc( 0, 255, 140, 255, "["..os.date("%H:%M:%S").."] Loaded Config from ".. tostring(fullPath))
+            return chunk()
+        else
+            CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) --saving the config
+            print("Error loading configuration:", err)
+        end
+    end
+end
+
+local status, loadedMenu = pcall(function() return assert(LoadCFG(string.format([[Lua %s]], Lua__fileName))) end) --auto load config
+
+if status then --ensure config is not causing errors
+    local allFunctionsExist = true
+    for k, v in pairs(Menu) do
+        if type(v) == 'function' then
+            if not loadedMenu[k] or type(loadedMenu[k]) ~= 'function' then
+                allFunctionsExist = false
+                break
+            end
+        end
+    end
+
+    if allFunctionsExist then
+        Menu = loadedMenu
+    else
+        print("config is outdated")
+        CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) --saving the config
+    end
+end
+
 local menuLoaded, ImMenu = pcall(require, "ImMenu")
 assert(menuLoaded, "ImMenu not found, please install it!")
 assert(ImMenu.GetVersion() >= 0.66, "ImMenu version is too old, please update it!")
@@ -89,8 +225,6 @@ local function toggleMenu()
     end
 end
 
-if UnloadLib then UnloadLib() end
-
 ---@alias AimTarget { entity : Entity, angles : EulerAngles, factor : number }
 
 ---@type boolean, lnxLib
@@ -103,6 +237,8 @@ local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
 local Helpers = lnxLib.TF2.Helpers
 local Prediction = lnxLib.TF2.Prediction
 local Fonts = lnxLib.UI.Fonts
+local Notify = lnxLib.UI.Notify
+
 
 local vHitbox = { Vector3(-1, -1, -1), Vector3(1, 1, 1) }
 
@@ -119,6 +255,86 @@ local MAX_CENTER_HISTORY = 5 -- Maximum number of center samples to consider for
 
 local strafeAngleHistories = {} -- History of strafe angles for each player
 local centerHistories = {} -- History of center directions for each player
+
+--[[
+        Input Utils
+    ]]
+
+    ---@class Input
+    local Input = {}
+
+    -- Fill the tables
+    local function D(x) return x, x end
+    for i = 1, 10 do KeyNames[i], KeyValues[i] = D(tostring(i - 1)) end -- 0 - 9
+    for i = 11, 36 do KeyNames[i], KeyValues[i] = D(string.char(i + 54)) end -- A - Z
+    for i = 37, 46 do KeyNames[i], KeyValues[i] = "KP_" .. (i - 37), tostring(i - 37) end -- KP_0 - KP_9
+    for i = 92, 103 do KeyNames[i] = "F" .. (i - 91) end
+    for i = 1, 10 do local mouseButtonName = "MOUSE_" .. i KeyNames[MOUSE_FIRST + i - 1] = mouseButtonName KeyValues[MOUSE_FIRST + i - 1] = "Mouse Button " .. i end
+
+    -- Returns the name of a keycode
+    ---@param key integer
+    ---@return string|nil
+    local function GetKeyName(key)
+        return KeyNames[key]
+    end
+
+    -- Returns the string value of a keycode
+    ---@param key integer
+    ---@return string|nil
+    local function KeyToChar(key)
+        return KeyValues[key]
+    end
+
+    -- Returns the keycode of a string value
+    ---@param char string
+    ---@return integer|nil
+    local function CharToKey(char)
+        return table.find(KeyValues, string.upper(char))
+    end
+
+    -- Update the GetPressedKey function to check for these additional mouse buttons
+    local function GetPressedKey()
+        for i = KEY_FIRST, KEY_LAST do
+            if input.IsButtonDown(i) then return i end
+        end
+
+        -- Check for standard mouse buttons
+        if input.IsButtonDown(MOUSE_LEFT) then return MOUSE_LEFT end
+        if input.IsButtonDown(MOUSE_RIGHT) then return MOUSE_RIGHT end
+        if input.IsButtonDown(MOUSE_MIDDLE) then return MOUSE_MIDDLE end
+
+        -- Check for additional mouse buttons
+        for i = 1, 10 do
+            if input.IsButtonDown(MOUSE_FIRST + i - 1) then return MOUSE_FIRST + i - 1 end
+        end
+
+        return nil
+    end
+
+    -- Returns all currently pressed keys as a table
+    ---@return integer[]
+    local function GetPressedKeys()
+        local keys = {}
+        for i = KEY_FIRST, KEY_LAST do
+            if input.IsButtonDown(i) then table.insert(keys, i) end
+        end
+
+        return keys
+    end
+
+    -- Define a table for centralized storage
+    local dataStorage = {}
+
+    -- Function to set or get values from the storage
+    function DataStorage(key, value)
+        -- If a value is provided, set it
+        if value ~= nil then
+            dataStorage[key] = value
+        else
+            -- If no value is provided, return the stored value
+            return dataStorage[key]
+        end
+    end
 
 ---@param me WPlayer
 local function CalcStrafe(me)
@@ -163,10 +379,6 @@ local function CalcStrafe(me)
         end
     end
 end
-
-
-
-
 
 -- Clamp function
 local function clamp(a, b, c)
@@ -220,6 +432,7 @@ end
 
     return vecOffset, vecMaxs, velForward
 end]]
+
 local M_RADPI = 180 / math.pi
 local NORMAL_TRACE_HULL_SIZE = 4  -- Normal hitbox size for projectiles
 local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ballistic missiles
@@ -231,79 +444,72 @@ local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ball
 ---@param gravity number
 ---@param sv_gravity number
 ---@return { angles: EulerAngles, time : number }?
----@param shouldHitEntity fun(entity: WEntity, contentsMask: integer): boolean?
-local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target)
+local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
     local v = dest - origin
     local v0 = speed
-    local v0_squared = v0 * v0  -- Calculate v0^2 once to avoid repeated calculations
+    local v0_squared = v0 * v0
     local g = sv_gravity * gravity
 
     local normalHitbox = { Vector3(-NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE), Vector3(NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE) }
     local largeHitbox = { Vector3(-LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE), Vector3(LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE) }
-    local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
 
     if g == 0 then
-        if trace.entity == target and trace.endpos == dest then
+        -- No gravity case
+        local time = v:Length() / v0
+        if time > timeToHit then
+            return false  -- Player will move out of range
+        end
+
+        -- Visibility and hull trace check
+        if not Helpers.VisPos(target:Unwrap(), origin, dest) then
             return nil
         end
 
-        if not Helpers.VisPos(target:Unwrap(), origin, dest) then return nil end
-        return { angles = Math.PositionAngles(origin, dest), time = v:Length() / v0, Prediction = dest }
+        local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+        if trace.fraction < 1 then
+            return false  -- Collision with an object before reaching the target
+        end
+
+        return { angles = Math.PositionAngles(origin, dest), time = time, Prediction = dest }
     else
-        trace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
-        if not trace.entity == target and trace.endpos == dest then
-            local dx = v:Length2D()
-            local dy = v.z
-            local g_dx = g * dx
-            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-            local root = v0_squared * v0_squared - root_part
+        -- Gravity involved, ballistic trajectory
+        local dx = v:Length2D()
+        local dy = v.z
+        local g_dx = g * dx
+        local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
+        local root = v0_squared * v0_squared - root_part
 
-            if root < 0 then return nil end
+        if root < 0 then return false end  -- No real solution
 
-            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
-            local yaw = math.atan(v.y, v.x)
+        local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
+        local yaw = math.atan(v.y, v.x)
+        local timeToTarget = dx / (math.cos(pitch) * v0)
 
-            if pitch ~= pitch or yaw ~= yaw then return nil end
+        if timeToTarget > timeToHit then
+            return false  -- Player will move out of range
+        end
 
-            local timeToTarget = dx / (math.cos(pitch) * v0)
-            local tickInterval = globals.TickInterval()
-            local numTicks = math.floor(timeToTarget / tickInterval)
-            local pos = origin
+        local pos = origin
+        for i = 1, math.floor(timeToTarget / globals.TickInterval()) do
+            local t = i * globals.TickInterval()
+            local x = v0 * math.cos(pitch) * t
+            local y = v0 * math.sin(pitch) * t - 0.5 * g * t * t
+            local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
+            local trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
 
-            for i = 1, numTicks do
-                local t = i * tickInterval
-                local x = v0 * math.cos(pitch) * t
-                local y = v0 * math.sin(pitch) * t - 0.5 * g * t * t
-                local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
-
-                trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-                if not trace.entity == target and trace.endpos == dest then
-                    return nil
-                end
-
-                pos = newPos
+            if trace.fraction < 1 then
+                return false  -- Collision detected
             end
 
-            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget, Prediction = pos }
-        else
-            local dx = v:Length2D()
-            local dy = v.z
-            local g_dx = g * dx
-            local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-            local root = v0_squared * v0_squared - root_part
-
-            if root < 0 then return nil end
-
-            local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
-            local yaw = math.atan(v.y, v.x)
-
-            if pitch ~= pitch or yaw ~= yaw then return nil end
-
-            local timeToTarget = dx / (math.cos(pitch) * v0)
-            return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget, Prediction = dest }
+            pos = newPos
         end
+
+        return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget, Prediction = pos }
     end
 end
+
+
+
 
 
 
@@ -495,8 +701,9 @@ local function CheckProjectileTarget(me, weapon, player)
             end
         end
 
-        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player)
+        local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
         if not solution then goto continue end
+        if solution == false then return nil end
 
         fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
         if fov > Menu.Main.AimFov then goto continue end
@@ -607,6 +814,9 @@ end
 
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
+    if Menu.AimkeyName ~= "MOUSE_1" and Menu.Main.AutoShoot then
+        userCmd:SetButtons(userCmd:GetButtons() & ~IN_ATTACK)
+    end
     if not input.IsButtonDown(Menu.Main.AimKey) then
         return
     end
@@ -706,60 +916,6 @@ local function L_line(start_pos, end_pos, secondary_line_size)
     end
 end
 
-local function CreateCFG(folder_name, table)
-    local success, fullPath = filesystem.CreateDirectory(folder_name)
-    local filepath = tostring(fullPath .. "/config.txt")
-    local file = io.open(filepath, "w")
-    
-    if file then
-        local function serializeTable(tbl, level)
-            level = level or 0
-            local result = string.rep("    ", level) .. "{\n"
-            for key, value in pairs(tbl) do
-                result = result .. string.rep("    ", level + 1)
-                if type(key) == "string" then
-                    result = result .. '["' .. key .. '"] = '
-                else
-                    result = result .. "[" .. key .. "] = "
-                end
-                if type(value) == "table" then
-                    result = result .. serializeTable(value, level + 1) .. ",\n"
-                elseif type(value) == "string" then
-                    result = result .. '"' .. value .. '",\n'
-                else
-                    result = result .. tostring(value) .. ",\n"
-                end
-            end
-            result = result .. string.rep("    ", level) .. "}"
-            return result
-        end
-        
-        local serializedConfig = serializeTable(table)
-        file:write(serializedConfig)
-        file:close()
-        printc( 255, 183, 0, 255, "["..os.date("%H:%M:%S").."] Saved to ".. tostring(fullPath))
-    end
-end
-
-local function LoadCFG(folder_name)
-    local success, fullPath = filesystem.CreateDirectory(folder_name)
-    local filepath = tostring(fullPath .. "/config.txt")
-    local file = io.open(filepath, "r")
-    
-    if file then
-        local content = file:read("*a")
-        file:close()
-        local chunk, err = load("return " .. content)
-        if chunk then
-            printc( 0, 255, 140, 255, "["..os.date("%H:%M:%S").."] Loaded from ".. tostring(fullPath))
-            return chunk()
-        else
-            print("Error loading configuration:", err)
-        end
-    end
-end
-
-
 local hitPos = {}
 local function PlayerHurtEvent(event)
     if (event:GetName() == 'player_hurt' ) and Menu.Visuals.VisualizeHitPos then
@@ -778,6 +934,9 @@ end
 callbacks.Register("FireGameEvent", "PlayerHurtEvent", PlayerHurtEvent)
 
 local clear_lines = 0
+local bindTimer = 0
+local bindDelay = 0.15  -- Delay of 0.2 seconds
+
 
 local function OnDraw()
     local PredTicks = Menu.Advanced.PredTicks
@@ -1003,7 +1162,40 @@ local function OnDraw()
 
         if Menu.tabs.Main then
             ImMenu.BeginFrame(1)
-            ImMenu.Text("The menu key is INSERT and the aim key is MOUSE4")
+            ImMenu.Text("Keybind: ")
+            if Menu.Main.AimkeyName ~= "Press The Key" and ImMenu.Button(Menu.Main.AimkeyName) then
+                Menu.Main.Is_Listening_For_Key = not Menu.Main.Is_Listening_For_Key
+                if Menu.Main.Is_Listening_For_Key then
+                    bindTimer = os.clock() + bindDelay
+                    Menu.Main.AimkeyName = "Press The Key"
+                else
+                    Menu.Main.AimkeyName = "Always On"
+                end
+            elseif Menu.Main.AimkeyName == "Press The Key" then
+                ImMenu.Text("Press the key")
+            end
+
+            if Menu.Main.Is_Listening_For_Key then
+                if os.clock() >= bindTimer then
+                    local pressedKey = GetPressedKey()
+                    print("Pressed key: ", pressedKey)
+                    if pressedKey then
+                        if pressedKey == KEY_ESCAPE then
+                            -- Reset keybind if the Escape key is pressed
+                            Menu.Main.AimkeyName = "Always On"
+                            Menu.Main.Is_Listening_For_Key = false
+                        else
+                            -- Update keybind with the pressed key
+                            local keyName = GetKeyName(pressedKey) or ""
+                            print("Key name: ", keyName)
+                            Menu.Main.AimkeyName = string.gsub(keyName, "Key_", "")
+                            Menu.Main.AimKey = pressedKey
+                            print("Keybind Success", "Bound Key: " .. Menu.Main.AimKey)
+                            Menu.Main.Is_Listening_For_Key = false
+                        end
+                    end
+                end
+            end
             ImMenu.EndFrame()
 
             --[[ImMenu.BeginFrame(1)
@@ -1158,11 +1350,24 @@ local function PropUpdate()
  
 end
 
+--[[ Remove the menu when unloaded ]]--
+local function OnUnload()                                -- Called when the script is unloaded
+    CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) --saving the config
+    UnloadLib() --unloading lualib
+    client.Command('play "ui/buttonclickrelease"', true) -- Play the "buttonclickrelease" sound
+end
+
+--[[ Unregister previous callbacks ]]--
 callbacks.Unregister("PostPropUpdate","ProjCamProp")
 callbacks.Register("PostPropUpdate","ProjCamProp", PropUpdate)
 
 callbacks.Unregister("CreateMove", "LNX.Aimbot.CreateMove")
 callbacks.Register("CreateMove", "LNX.Aimbot.CreateMove", OnCreateMove)
 
+callbacks.Unregister("Unload", "LNX.Aimbot.OnUnload")
+callbacks.Register("Unload", "LNX.Aimbot.OnUnload", OnUnload)
+
 callbacks.Unregister("Draw", "LNX.Aimbot.Draw")
 callbacks.Register("Draw", "LNX.Aimbot.Draw", OnDraw)
+--[[ Play sound when loaded ]]--
+client.Command('play "ui/buttonclick"', true) -- Play the "buttonclick" sound when the script is loaded
