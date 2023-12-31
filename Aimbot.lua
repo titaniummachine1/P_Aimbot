@@ -472,19 +472,24 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
 
         return { angles = Math.PositionAngles(origin, dest), time = time, Prediction = dest }
     else
-        -- Gravity involved, ballistic trajectory
+        -- Function to check for collision (simplified)
+        local function IsCollisionDetected(startPos, endPos, target)
+            local trace = engine.TraceLine(startPos, endPos, MASK_PLAYERSOLID)
+            return trace.fraction < 1 and trace.entity ~= target
+        end
+
+        local v = dest - origin
+        local v0 = speed
         local dx = v:Length2D()
         local dy = v.z
-        local g_dx = g * dx
-        local root_part = g * (g_dx * dx + 2 * dy * v0_squared)
-        local root = v0_squared * v0_squared - root_part
+        local g = sv_gravity * gravity
 
-        if root < 0 then return false end  -- No real solution
-
-        local pitch = math.atan((v0_squared - math.sqrt(root)) / g_dx)
+        -- Simplified trajectory calculation
+        local pitch = math.atan(dy, dx)
         local yaw = math.atan(v.y, v.x)
-        local timeToTarget = dx / (math.cos(pitch) * v0)
+        local timeToTarget = (dx / v0) / math.cos(pitch)
 
+        -- Check if the target can be hit within the time limit
         if timeToTarget > timeToHit then
             return false  -- Player will move out of range
         end
@@ -492,12 +497,12 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
         local pos = origin
         for i = 1, math.floor(timeToTarget / globals.TickInterval()) do
             local t = i * globals.TickInterval()
-            local x = v0 * math.cos(pitch) * t
-            local y = v0 * math.sin(pitch) * t - 0.5 * g * t * t
-            local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
-            local trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+            local horizontalDistance = v0 * t * math.cos(pitch)
+            local verticalDistance = (v0 * t * math.sin(pitch)) - (0.5 * g * t * t)
+            local newPos = origin + Vector3(horizontalDistance * math.cos(yaw), horizontalDistance * math.sin(yaw), verticalDistance)
 
-            if trace.fraction < 1 then
+            -- Simplified collision check
+            if IsCollisionDetected(pos, newPos, target) then
                 return false  -- Collision detected
             end
 
@@ -814,7 +819,7 @@ end
 
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-    if Menu.AimkeyName ~= "MOUSE_1" and Menu.Main.AutoShoot then
+    if Menu.AimkeyName == "MOUSE_1" and Menu.Main.AutoShoot then
         userCmd:SetButtons(userCmd:GetButtons() & ~IN_ATTACK)
     end
     if not input.IsButtonDown(Menu.Main.AimKey) then
