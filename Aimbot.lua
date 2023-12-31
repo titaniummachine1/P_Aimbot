@@ -53,6 +53,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         Hitchance_Accuracy = 10,
         StrafePrediction = true,
         StrafeSamples = 4,
+        ProjectileSegments = 10,
         Aim_Modes = {
             Leading = true,
             trailing = false,
@@ -434,9 +435,22 @@ end
 end]]
 
 local M_RADPI = 180 / math.pi
-local NORMAL_TRACE_HULL_SIZE = 4  -- Normal hitbox size for projectiles
-local LARGE_TRACE_HULL_SIZE = 40  -- Large hitbox size for initial check on ballistic missiles
+local normalHitbox = { Vector3(-4, -4, -4), Vector3(4, 4, 4), Vector3(4, 4, 4)  }
+-- Preliminary large hull check
+local largeHitbox = { Vector3(-4, -4, -4), Vector3(4, 4, 4), Vector3(4, 4, 50)  }
 
+-- Cache API calls for optimization
+local atan = math.atan
+local cos = math.cos
+local sin = math.sin
+local sqrt = math.sqrt
+local floor = math.floor
+local TickInterval = globals.TickInterval
+local TraceLine = engine.TraceLine
+local TraceHull = engine.TraceHull
+local function isNaN(x) return x ~= x end
+
+local projectileSimulation = {}
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
 ---@param dest Vector3
@@ -450,8 +464,8 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
     local v0_squared = v0 * v0
     local g = sv_gravity * gravity
 
-    local normalHitbox = { Vector3(-NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE, -NORMAL_TRACE_HULL_SIZE), Vector3(NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE, NORMAL_TRACE_HULL_SIZE) }
-    local largeHitbox = { Vector3(-LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE, -LARGE_TRACE_HULL_SIZE), Vector3(LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE, LARGE_TRACE_HULL_SIZE) }
+    local initialTrace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
+    local shouldUseDetailedHullTrace = initialTrace.fraction < 1 and initialTrace.entity ~= target
 
     if g == 0 then
         -- No gravity case
@@ -462,54 +476,74 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
 
         -- Visibility and hull trace check
         if not Helpers.VisPos(target:Unwrap(), origin, dest) then
-            return nil
+            return false  -- Target is not visible
         end
 
         local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-        if trace.fraction < 1 then
+        if trace.fraction < 1 and trace.entity ~= target then
             return false  -- Collision with an object before reaching the target
         end
 
         return { angles = Math.PositionAngles(origin, dest), time = time, Prediction = dest }
     else
-        -- Function to check for collision (simplified)
-        local function IsCollisionDetected(startPos, endPos, target)
-            local trace = engine.TraceLine(startPos, endPos, MASK_PLAYERSOLID)
-            return trace.fraction < 1 and trace.entity ~= target
-        end
-
-        local v = dest - origin
-        local v0 = speed
+        -- Ballistic arc calculation
         local dx = v:Length2D()
         local dy = v.z
-        local g = sv_gravity * gravity
+        local root = v0_squared * v0_squared - g * (g * dx * dx + 2 * dy * v0_squared)
+        if root < 0 then return nil end
 
-        -- Simplified trajectory calculation
-        local pitch = math.atan(dy, dx)
+        local pitch = math.atan((v0_squared - math.sqrt(root)) / (g * dx))
         local yaw = math.atan(v.y, v.x)
-        local timeToTarget = (dx / v0) / math.cos(pitch)
 
-        -- Check if the target can be hit within the time limit
-        if timeToTarget > timeToHit then
-            return false  -- Player will move out of range
-        end
+        if isNaN(pitch) or isNaN(yaw) then return nil end
 
+        local angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI)
+        local timeToTarget = dx / (math.cos(pitch) * v0)
+
+        -- Adjusted simulation with segments and drag
+        local numSegments = Menu.Advanced.ProjectileSegments or 2
+        local segmentLength = timeToTarget / numSegments
         local pos = origin
-        for i = 1, math.floor(timeToTarget / globals.TickInterval()) do
-            local t = i * globals.TickInterval()
-            local horizontalDistance = v0 * t * math.cos(pitch)
-            local verticalDistance = (v0 * t * math.sin(pitch)) - (0.5 * g * t * t)
-            local newPos = origin + Vector3(horizontalDistance * math.cos(yaw), horizontalDistance * math.sin(yaw), verticalDistance)
+        local trace
+        local currentVelocity = v0
 
-            -- Simplified collision check
-            if IsCollisionDetected(pos, newPos, target) then
+        -- Drag data
+        local drag = 1
+        local drag_basis = { 0.003902, 0.009962, 0.009962 }
+        local ang_drag_basis = { 0.003618, 0.001514, 0.001514 }
+
+        -- Calculate drag coefficient
+        local dragCoefficient = drag * (drag_basis[1] + drag_basis[2] + drag_basis[3] + ang_drag_basis[1] + ang_drag_basis[2] + ang_drag_basis[3])
+
+        -- Table to store positions
+        projectileSimulation = {pos}
+
+        for segment = 1, numSegments do
+            local t = segment * segmentLength
+
+            -- Apply drag to the velocity
+            currentVelocity = currentVelocity * (1 - dragCoefficient * t)
+
+            local x = currentVelocity * math.cos(pitch) * t
+            local y = currentVelocity * math.sin(pitch) * t - 0.5 * g * t * t
+            local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
+
+            if segment <= 10 or not shouldUseDetailedHullTrace then
+                trace = engine.TraceLine(pos, newPos, MASK_SHOT_HULL)
+            else
+                trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_SHOT_HULL)
+            end
+
+            -- Save position
+            table.insert(projectileSimulation, newPos)
+            if trace.fraction < 1 and trace.entity ~= target then
                 return false  -- Collision detected
             end
 
             pos = newPos
         end
 
-        return { angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI), time = timeToTarget, Prediction = pos }
+        return { angles = angles, time = timeToTarget, Prediction = pos, Positions = positions }
     end
 end
 
@@ -819,7 +853,7 @@ end
 
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-    if Menu.AimkeyName == "MOUSE_1" and Menu.Main.AutoShoot then
+    if Menu.AimKey == MOUSE_1 and Menu.Main.AutoShoot then
         userCmd:SetButtons(userCmd:GetButtons() & ~IN_ATTACK)
     end
     if not input.IsButtonDown(Menu.Main.AimKey) then
@@ -1034,6 +1068,27 @@ local function OnDraw()
                 if Menu.Visuals.Path_styles_selected == 2 then
                     L_line(pos1, pos2, 10)
                 end
+
+                if projectileSimulation and Menu.Visuals.VisualizeProjectile then
+                    for i = 1, #projectileSimulation - 1 do
+                        local pos1 = projectileSimulation[i]
+                        local pos2 = projectileSimulation[i + 1]
+
+                        if pos1 and pos2 then
+                            if Menu.Visuals.Path_styles_selected == 1 or Menu.Visuals.Path_styles_selected == 3 then 
+                                local screenPos1 = client.WorldToScreen(pos1)
+                                local screenPos2 = client.WorldToScreen(pos2)
+                        
+                                if screenPos1 ~= nil and screenPos2 ~= nil and (not (Menu.Visuals.Path_styles_selected == 3) or i % 2 == 1) then
+                                    draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+                                end
+                            end
+                            if Menu.Visuals.Path_styles_selected == 2 then
+                                L_line(pos1, pos2, 10)
+                            end
+                        end
+                    end
+                end
             end
         end
 
@@ -1246,6 +1301,10 @@ local function OnDraw()
             ImMenu.BeginFrame(1)
             Menu.Advanced.StrafeSamples = ImMenu.Slider("Strafe Samples", Menu.Advanced.StrafeSamples , 2, 49)
             ImMenu.EndFrame()
+    
+            ImMenu.BeginFrame(1)
+            Menu.Advanced.ProjectileSegments = ImMenu.Slider("projectile Simulation Segments", Menu.Advanced.ProjectileSegments, 3, 50)
+            ImMenu.EndFrame()
 
 
 
@@ -1262,19 +1321,18 @@ local function OnDraw()
 
             if  Menu.Visuals.Active then 
                 ImMenu.BeginFrame(1)
-                Menu.Visuals.VisualizePath = ImMenu.Checkbox("Visualize Path", Menu.Visuals.VisualizePath)
+                Menu.Visuals.VisualizePath = ImMenu.Checkbox("Player Path", Menu.Visuals.VisualizePath)
+                Menu.Visuals.VisualizeProjectile = ImMenu.Checkbox("Projectile Simulation", Menu.Visuals.VisualizeProjectile)
                 ImMenu.EndFrame()
-                ImMenu.BeginFrame(1)
-                Menu.Visuals.VisualizeHitchance = ImMenu.Checkbox("Visualize Hitchance", Menu.Visuals.VisualizeHitchance)
-                ImMenu.EndFrame()
-                ImMenu.BeginFrame(1)
-                Menu.Visuals.Crosshair = ImMenu.Checkbox("Crosshair", Menu.Visuals.Crosshair)
-                ImMenu.EndFrame()
+    
                 ImMenu.BeginFrame(1)
                 Menu.Visuals.VisualizeHitPos = ImMenu.Checkbox("Visualize Hit Pos", Menu.Visuals.VisualizeHitPos)
-                ImMenu.EndFrame()
-                ImMenu.BeginFrame(1)
+                Menu.Visuals.Crosshair = ImMenu.Checkbox("Crosshair", Menu.Visuals.Crosshair)
                 Menu.Visuals.NccPred = ImMenu.Checkbox("Nullcore Pred Visuals", Menu.Visuals.NccPred)
+                ImMenu.EndFrame()
+    
+                ImMenu.BeginFrame(1)
+                Menu.Visuals.VisualizeHitchance = ImMenu.Checkbox("Visualize Hitchance", Menu.Visuals.VisualizeHitchance)
                 ImMenu.EndFrame()
 
                 if Menu.Visuals.VisualizePath then 
