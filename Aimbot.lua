@@ -30,7 +30,6 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         Main = true,
         Advanced = false,
         Visuals = false,
-        Config = false,
     },
 
     Main = {
@@ -40,6 +39,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         Is_Listening_For_Key = false,
         AutoShoot = true,
         Silent = true,
+        SplashPrediction = true,
         AimPos = {
             Hitscan = Hitbox.Head,
             Projectile = Hitbox.Feet
@@ -49,6 +49,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     },
 
     Advanced = {
+        SplashAccuracy = 4,
         PredTicks = 77,
         Hitchance_Accuracy = 10,
         StrafePrediction = true,
@@ -240,9 +241,6 @@ local Prediction = lnxLib.TF2.Prediction
 local Fonts = lnxLib.UI.Fonts
 local Notify = lnxLib.UI.Notify
 
-
-local vHitbox = { Vector3(-1, -1, -1), Vector3(1, 1, 1) }
-
 local latency = 0
 local lerp = 0
 local lastAngles = {} ---@type EulerAngles[]
@@ -251,6 +249,7 @@ local hitChance = 0
 local lastPosition = {}
 local priorPrediction = {}
 local vPath = {}
+local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
 local MAX_CENTER_HISTORY = 5 -- Maximum number of center samples to consider for smoothing
 
@@ -321,6 +320,11 @@ local centerHistories = {} -- History of center directions for each player
         end
 
         return keys
+    end
+
+    function Normalize(vec)
+        local length = math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
+        return Vector3(vec.x / length, vec.y / length, vec.z / length)
     end
 
     -- Define a table for centralized storage
@@ -450,7 +454,98 @@ local TraceLine = engine.TraceLine
 local TraceHull = engine.TraceHull
 local function isNaN(x) return x ~= x end
 
+-- Normalize vector function
+local function NormalizeVector(vector)
+    local length = math.sqrt(vector.x * vector.x + vector.y * vector.y)
+    if length == 0 then
+        return Vector3(0, 0, vector.z)
+    else
+        return Vector3(vector.x / length, vector.y / length, vector.z / length)
+    end
+end
+
+-- Rotate vector function
+local function RotateVector(vector, angle)
+    local rad = math.rad(angle)
+    local cosAngle = math.cos(rad)
+    local sinAngle = math.sin(rad)
+    return Vector3(
+        vector.x * cosAngle - vector.y * sinAngle,
+        vector.x * sinAngle + vector.y * cosAngle,
+        vector.z
+    )
+end
+
+-- Define the necessary variables
+local vel = Vector3(0, 0, 0)  -- Replace with the actual velocity
+local groundTrace = {}  -- Replace with the actual ground trace
+local vUp = Vector3(0, 0, 1)  -- Replace with the actual up vector
+local GROUND_COLLISION_ANGLE_LOW = 45  -- Replace with the actual value
+local GROUND_COLLISION_ANGLE_HIGH = 60  -- Replace with the actual value
+local FORWARD_COLLISION_ANGLE = 55 
+
 local projectileSimulation = {}
+local projectileSimulation2 = Vector3(0, 0, 0)
+
+-- Helper function for forward collision
+local function handleForwardCollision(vel, wallTrace)
+    local normal = wallTrace.plane
+    local angle = math.deg(math.acos(normal:Dot(vUp)))
+    if angle > FORWARD_COLLISION_ANGLE then
+        local dot = vel:Dot(normal)
+        vel = vel - normal * dot
+    end
+    return wallTrace.endpos.x, wallTrace.endpos.y
+end
+
+-- Helper function for ground collision
+local function handleGroundCollision(vel, groundTrace)
+    local normal = groundTrace.plane
+    local angle = math.deg(math.acos(normal:Dot(vUp)))
+    local onGround = false
+    if angle < GROUND_COLLISION_ANGLE_LOW then
+        onGround = true
+    elseif angle < GROUND_COLLISION_ANGLE_HIGH then
+        vel.x, vel.y, vel.z = 0, 0, 0
+    else
+        local dot = vel:Dot(normal)
+        vel = vel - normal * dot
+        onGround = true
+    end
+    if onGround then vel.z = 0 end
+    return groundTrace.endpos, onGround
+end
+
+-- Helper function to check path clearance
+local function checkPath2(dest, direction, angle, distance, origin, target)
+    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
+    local point = dest + RotateVector(direction, angle) * distance
+        --Forward Collision
+    local wallTrace = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_SHOT_HULL, shouldhitentiy)
+    if wallTrace.fraction < 1 then
+        point.x, point.y = handleForwardCollision(direction, wallTrace, Vector3(0, 0, 1))
+    end
+
+    -- Simulate a move in the direction of the adjusted velocity
+    --[[sHandle ground collision
+    groundTrace = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_SHOT_HULL)
+    local newPos, onGround = handleGroundCollision(direction, groundTrace, Vector3(0, 0, 1))
+
+    --If the player is on the ground, adjust the point
+    if onGround then
+        point = newPos
+    end]]
+
+    -- Check if the trace can hit the point from the origin
+    local trace = engine.TraceHull(origin, point, normalHitbox[1], normalHitbox[2], MASK_SHOT_HULL)
+
+    print(trace.fraction)
+    if trace.fraction > 0.9 then
+        projectileSimulation2 = trace.endpos
+        return true, trace.endpos
+    end
+end
+
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
 ---@param dest Vector3
@@ -463,6 +558,8 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
     local v0 = speed
     local v0_squared = v0 * v0
     local g = sv_gravity * gravity
+    local shootpos = dest
+    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
 
     local initialTrace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
     local shouldUseDetailedHullTrace = initialTrace.fraction < 1 and initialTrace.entity ~= target
@@ -474,17 +571,63 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
             return false  -- Player will move out of range
         end
 
-        -- Visibility and hull trace check
-        if not Helpers.VisPos(target:Unwrap(), origin, dest) then
-            return false  -- Target is not visible
+        -- Helper function to check path clearance
+        local function checkPath(direction, angle, distance)
+            local point = dest + RotateVector(direction, angle) * distance
+            point = (engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)).endpos
+            local trace = engine.TraceHull(origin, point, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+            return trace.fraction > 0.99 -- Check if the path is clears
         end
 
-        local trace = engine.TraceHull(origin, dest, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-        if trace.fraction < 1 and trace.entity ~= target then
-            return false  -- Collision with an object before reaching the target
+        -- Assuming RotateVector and NormalizeVector functions are defined
+        local trace = engine.TraceHull(origin, shootpos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
+        if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
+            if Menu.Main.SplashPrediction == true then
+                -- Collision with an object before reaching the target, try again with adjusted height
+                shootpos.z = shootpos.z + 72
+                trace = engine.TraceHull(origin, shootpos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+                
+                if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
+                    -- Adjusted height also blocked, return to original height and check left/right
+                    shootpos.z = shootpos.z - 72
+                    local direction = NormalizeVector(shootpos - origin)
+                    
+
+                    local angle = 90  -- Replace with the actual angle
+                    local distance = 150  -- Replace with the actual distance
+
+                    -- Check initial clearance for left and right
+                    local leftClear, Leftpoint = checkPath2(dest, direction, -90, distance, origin, target)
+                    local rightClear, Rightpoint = checkPath2(dest, direction, 90, distance, origin, target)
+
+                    -- Perform binary search on the clear side
+                    local side = leftClear == true and -90 or rightClear == true and 90
+                    if side then
+                        local minDistance = 0
+                        local maxDistance = 150
+                        local iterations = Menu.Advanced.SplashAccuracy
+                        for i = 1, iterations do
+                            local midDistance = (minDistance + maxDistance) / 2
+                            if checkPath(direction, side, midDistance) then
+                                maxDistance = midDistance
+                            else
+                                minDistance = midDistance
+                            end
+                        end
+                        shootpos = dest + RotateVector(direction, side) * maxDistance
+                    else
+                        -- Both left and right blocked
+                        return false
+                    end
+                end
+            else
+                return false
+            end
         end
 
-        return { angles = Math.PositionAngles(origin, dest), time = time, Prediction = dest }
+        projectileSimulation = {origin}
+        table.insert(projectileSimulation, dest)
+        return { angles = Math.PositionAngles(origin, shootpos), time = time, Prediction = shootpos }
     else
         -- Ballistic arc calculation
         local dx = v:Length2D()
@@ -616,40 +759,6 @@ local function calculateHitChancePercentage(lastPredictedPos, currentPos)
     end
 end
 
--- Constants
-local FORWARD_COLLISION_ANGLE = 55
-local GROUND_COLLISION_ANGLE_LOW = 45
-local GROUND_COLLISION_ANGLE_HIGH = 55
-
--- Helper function for forward collision
-local function handleForwardCollision(vel, wallTrace, vUp)
-    local normal = wallTrace.plane
-    local angle = math.deg(math.acos(normal:Dot(vUp)))
-    if angle > FORWARD_COLLISION_ANGLE then
-        local dot = vel:Dot(normal)
-        vel = vel - normal * dot
-    end
-    return wallTrace.endpos.x, wallTrace.endpos.y
-end
-
--- Helper function for ground collision
-local function handleGroundCollision(vel, groundTrace, vUp)
-    local normal = groundTrace.plane
-    local angle = math.deg(math.acos(normal:Dot(vUp)))
-    local onGround = false
-    if angle < GROUND_COLLISION_ANGLE_LOW then
-        onGround = true
-    elseif angle < GROUND_COLLISION_ANGLE_HIGH then
-        vel.x, vel.y, vel.z = 0, 0, 0
-    else
-        local dot = vel:Dot(normal)
-        vel = vel - normal * dot
-        onGround = true
-    end
-    if onGround then vel.z = 0 end
-    return groundTrace.endpos, onGround
-end
-
 local shouldPredict = true
 
 -- Main function
@@ -661,8 +770,6 @@ local function CheckProjectileTarget(me, weapon, player)
     local gravity = client.GetConVar("sv_gravity")
     local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
     local strafeAngle = Menu.Advanced.StrafePrediction and strafeAngles[player:GetIndex()] or nil
-    local vUp = Vector3(0, 0, 1)
-    vHitbox = { Vector3(-20, -20, 0), Vector3(20, 20, 80) }
     local vStep = Vector3(0, 0, stepSize / 2)
     vPath = {}
     local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), player:IsOnGround()
@@ -853,13 +960,13 @@ end
 
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-    if Menu.AimKey == MOUSE_1 and Menu.Main.AutoShoot then
+    if Menu.Main.AimKey == MOUSE_1 and Menu.Main.AutoShoot and input.IsButtonDown(Menu.Main.AimKey) then
         userCmd:SetButtons(userCmd:GetButtons() & ~IN_ATTACK)
     end
     if not input.IsButtonDown(Menu.Main.AimKey) then
         return
     end
-
+    projectileSimulation2 = nil
     local me = WPlayer.GetLocal()
     local pLocal = entities.GetLocalPlayer()
     if not me or not me:IsAlive() then return end
@@ -940,7 +1047,7 @@ local function L_line(start_pos, end_pos, secondary_line_size)
     if direction_length == 0 then
         return
     end
-    local normalized_direction = direction / direction_length
+    local normalized_direction = Normalize(direction)
     local perpendicular = Vector3(normalized_direction.y, -normalized_direction.x, 0) * secondary_line_size
     local w2s_start_pos = client.WorldToScreen(start_pos)
     local w2s_end_pos = client.WorldToScreen(end_pos)
@@ -1027,7 +1134,16 @@ local function OnDraw()
             end
                 
             draw.Color(255 - math.floor((hitChance / 100) * 255), math.floor((hitChance / 100) * 255), 0, 255)
-
+ 
+               --draw predicted local position with strafe prediction
+               if projectileSimulation2 then
+                local screenPos = client.WorldToScreen(projectileSimulation2)
+                    if screenPos ~= nil then
+                        draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
+                        draw.Line( screenPos[1], screenPos[2] - 10, screenPos[1], screenPos[2] + 10)
+                    end
+                end
+    
             if Menu.Visuals.VisualizeHitchance or Menu.Visuals.Crosshair or Menu.Visuals.NccPred then 
                 if i == #vPath - 1 then 
                     local screenPos1 = client.WorldToScreen(pos1)
@@ -1195,28 +1311,18 @@ local function OnDraw()
             Menu.tabs.Main = true
             Menu.tabs.Advanced = false
             Menu.tabs.Visuals = false
-            Menu.tabs.Config = false
         end
 
         if ImMenu.Button("Advanced") then
             Menu.tabs.Main = false
             Menu.tabs.Advanced = true
             Menu.tabs.Visuals = false
-            Menu.tabs.Config = false
         end
 
         if ImMenu.Button("Visuals") then
             Menu.tabs.Main = false
             Menu.tabs.Advanced = false
             Menu.tabs.Visuals = true
-            Menu.tabs.Config = false
-        end
-
-        if ImMenu.Button("Config") then
-            Menu.tabs.Main = false
-            Menu.tabs.Advanced = false
-            Menu.tabs.Visuals = false
-            Menu.tabs.Config = true
         end
         ImMenu.EndFrame()
 
@@ -1238,7 +1344,6 @@ local function OnDraw()
             if Menu.Main.Is_Listening_For_Key then
                 if os.clock() >= bindTimer then
                     local pressedKey = GetPressedKey()
-                    print("Pressed key: ", pressedKey)
                     if pressedKey then
                         if pressedKey == KEY_ESCAPE then
                             -- Reset keybind if the Escape key is pressed
@@ -1267,6 +1372,10 @@ local function OnDraw()
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
+            Menu.Main.SplashPrediction = ImMenu.Checkbox("Splash Prediction", Menu.Main.SplashPrediction)
+            ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
             Menu.Main.AutoShoot = ImMenu.Checkbox("AutoShoot", Menu.Main.AutoShoot)
             ImMenu.EndFrame()
 
@@ -1287,24 +1396,28 @@ local function OnDraw()
         if Menu.tabs.Advanced then
 
             ImMenu.BeginFrame(1)
-            Menu.Advanced.StrafePrediction = ImMenu.Checkbox("Strafe Pred", Menu.Advanced.StrafePrediction)
+                Menu.Advanced.StrafePrediction = ImMenu.Checkbox("Strafe Pred", Menu.Advanced.StrafePrediction)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            Menu.Advanced.PredTicks = ImMenu.Slider("PredTicks", Menu.Advanced.PredTicks , 1, 200)
+                Menu.Advanced.StrafeSamples = ImMenu.Slider("Strafe Samples", Menu.Advanced.StrafeSamples, 2, 49)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            Menu.Advanced.Hitchance_Accuracy = ImMenu.Slider("Accuracy", Menu.Advanced.Hitchance_Accuracy , 1, Menu.Advanced.PredTicks)
+                Menu.Advanced.PredTicks = ImMenu.Slider("PredTicks", Menu.Advanced.PredTicks , 1, 200)
+            ImMenu.EndFrame()
+            
+            ImMenu.BeginFrame(1)
+                Menu.Advanced.Hitchance_Accuracy = ImMenu.Slider("Accuracy", Menu.Advanced.Hitchance_Accuracy , 1, Menu.Advanced.PredTicks)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            Menu.Advanced.StrafeSamples = ImMenu.Slider("Strafe Samples", Menu.Advanced.StrafeSamples , 2, 49)
+                Menu.Advanced.ProjectileSegments = ImMenu.Slider("projectile Simulation Segments", Menu.Advanced.ProjectileSegments, 3, 50)
             ImMenu.EndFrame()
-    
-            ImMenu.BeginFrame(1)
-            Menu.Advanced.ProjectileSegments = ImMenu.Slider("projectile Simulation Segments", Menu.Advanced.ProjectileSegments, 3, 50)
-            ImMenu.EndFrame()
+
+            --[[ImMenu.BeginFrame(1)
+                Menu.Advanced.SplashAccuracy = ImMenu.Slider("Splash Accuracy", Menu.Advanced.SplashAccuracy, 2, 50)
+            ImMenu.EndFrame()]]
 
 
 
@@ -1344,23 +1457,6 @@ local function OnDraw()
                     ImMenu.EndFrame()
                 end
             end
-        end
-
-        if Menu.tabs.Config then 
-            ImMenu.BeginFrame(1)
-            if ImMenu.Button("Create/Save CFG") then
-                CreateCFG( [[LBOX aimbot lua]] , Menu )
-            end
-
-            if ImMenu.Button("Load CFG") then
-                Menu = LoadCFG( [[LBOX aimbot lua]] )
-            end
-
-            ImMenu.EndFrame()
-
-            ImMenu.BeginFrame(1)
-            ImMenu.Text("Dont load a config if you havent saved one.")
-            ImMenu.EndFrame()
         end
 
         ImMenu.End()
