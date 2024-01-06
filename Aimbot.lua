@@ -66,7 +66,6 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         AimkeyName = "LSHIFT",
         AutoShoot = true,
         Silent = true,
-        SplashPrediction = true,
         AimPos = {
             CurrentAimPos = Hitbox.Head,
             Hitscan = Hitbox.Head,
@@ -79,6 +78,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
     },
 
     Advanced = {
+        SplashPrediction = true,
         SplashAccuracy = 4,
         PredTicks = 77,
         Hitchance_Accuracy = 10,
@@ -581,7 +581,7 @@ local function checkPath2(dest, direction, angle, distance, origin, target)
     local point = dest + RotateVector(direction, angle) * distance
 
     local traceHull = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
-    traceHull = engine.TraceHull(point, point + Vector3(0, 0, -100), DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+    traceHull = engine.TraceHull(point, point + Vector3(0, 0, -100), DefaultHitbox[1] + Vector3(1,1,1), DefaultHitbox[2] - Vector3(1,1,1), MASK_PLAYERSOLID, shouldhitentiy)
 
     -- Check if the end point is within an acceptable range to the target
     local distanceToTarget = (traceHull.endpos - dest):Length()
@@ -592,7 +592,7 @@ local function checkPath2(dest, direction, angle, distance, origin, target)
     end
 
     -- Check visibility from end point to target
-    local traceLine = engine.TraceLine(traceHull.endpos, dest, MASK_PLAYERSOLID)
+    local traceLine = engine.TraceLine(origin, dest, MASK_PLAYERSOLID)
     if traceLine.fraction > 0.9 then
         return false
     end
@@ -620,17 +620,20 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadious, shou
     if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
         local direction = NormalizeVector(dest - origin)
 
+        -- Check initial clearance for left and right using checkPath2
         local leftClear, leftMaxPoint = checkPath2(dest, direction, -90, BlastRadious, origin, target)
         local rightClear, rightMaxPoint = checkPath2(dest, direction, 90, BlastRadious, origin, target)
 
+        -- Determine the side to perform binary search on and its maximum distance point
         local searchSide = nil
         local maxDistancePoint = nil
 
-        -- Determine which side to search based on clearance and distance to target
         if leftClear or rightClear then
             if leftClear and rightClear then
+                -- Determine which side is closer to dest
                 local leftDistance = (leftMaxPoint - dest):Length()
                 local rightDistance = (rightMaxPoint - dest):Length()
+
                 if leftDistance < rightDistance then
                     searchSide = -90
                     maxDistancePoint = leftMaxPoint
@@ -647,39 +650,38 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadious, shou
             end
         end
 
+        -- Perform binary search to find the closest shootable point to dest
         if searchSide and maxDistancePoint then
             local minDistance = 0
             local maxDistance = (maxDistancePoint - dest):Length()
-            local iterations = 5
-            local bestPoint = nil
-            local bestDistance = math.huge
+            local iterations = Menu.Advanced.SplashAccuracy
+            local bestPoint = maxDistancePoint  -- Start with the farthest point
+            local bestDistance = maxDistance
 
             for i = 1, iterations do
                 local midDistance = (minDistance + maxDistance) / 2
-                local midClear, midPoint = checkPath(direction, searchSide, midDistance)
+                local isClear, midPoint = checkPath(direction, searchSide, midDistance)
 
-                if midClear then
-                    local distanceToTarget = (midPoint - dest):Length()
-                    if distanceToTarget < bestDistance then
-                        bestDistance = distanceToTarget
+                if isClear then
+                    local distanceToDest = (midPoint - dest):Length()
+                    if distanceToDest < bestDistance then
+                        bestDistance = distanceToDest
                         bestPoint = midPoint
                     end
-                    minDistance = midDistance
-                else
                     maxDistance = midDistance
+                else
+                    minDistance = midDistance
                 end
             end
 
             if bestPoint then
                 projectileSimulation2 = bestPoint
                 return bestPoint
-            else
-                return false
             end
-        else
-            return false
         end
-    end
+
+        return false  -- No valid shooting position found
+        end
 
     return dest
 end
@@ -878,10 +880,9 @@ local function CheckProjectileTarget(me, weapon, player)
         local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
         if solution == nil then goto continue end
 
-        if solution == false then
-            if Menu.Main.SplashPrediction and projInfo[2] == 0 then
+        if not solution then
+            if Menu.Advanced.SplashPrediction and projInfo[2] == 0 then
                 local bestPos = FindBestShootingPosition(shootPos, pos, player, BlastRadious, shouldHitEntity)
-                print(bestPos)
                 if bestPos then
                     solution = SolveProjectile(shootPos, bestPos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
                 end
@@ -983,7 +984,7 @@ local function GetBestTarget(me, weapon)
             goto continue
         end
 
-        local distanceFactor = Math.RemapValClamped(distance, 100, 1500, 1, 0.09)
+        local distanceFactor = Math.RemapValClamped(distance, 50, 2500, 1, 0.09)
         local fovFactor = Math.RemapValClamped(fov, 0, Menu.Main.AimFov, 1, 0.7)
         local isVisible = Helpers.VisPos(player, localPlayerOrigin + Vector3(0,0,75), playerOrigin + Vector3(0,0,75))
         local visibilityFactor = isVisible and 1 or 0.5
@@ -1414,10 +1415,6 @@ local function OnDraw()
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            Menu.Main.SplashPrediction = ImMenu.Checkbox("Splash Prediction", Menu.Main.SplashPrediction)
-            ImMenu.EndFrame()
-
-            ImMenu.BeginFrame(1)
             Menu.Main.AutoShoot = ImMenu.Checkbox("AutoShoot", Menu.Main.AutoShoot)
             ImMenu.EndFrame()
 
@@ -1443,6 +1440,14 @@ local function OnDraw()
 
             ImMenu.BeginFrame(1)
                 Menu.Advanced.StrafePrediction = ImMenu.Checkbox("Strafe Pred", Menu.Advanced.StrafePrediction)
+            ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
+                Menu.Advanced.SplashPrediction = ImMenu.Checkbox("Splash Prediction", Menu.Advanced.SplashPrediction)
+            ImMenu.EndFrame()
+            
+            ImMenu.BeginFrame(1)
+                Menu.Advanced.SplashAccuracy = ImMenu.Slider("Splash Accuracy", Menu.Advanced.SplashAccuracy, 2, 47)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
