@@ -10,6 +10,39 @@
     https://github.com/Muqa1
 ]]
 
+local menuLoaded, ImMenu = pcall(require, "ImMenu")
+assert(menuLoaded, "ImMenu not found, please install it!")
+assert(ImMenu.GetVersion() >= 0.66, "ImMenu version is too old, please update it!")
+
+local lastToggleTime = 0
+local Lbox_Menu_Open = true
+local function toggleMenu()
+    local currentTime = globals.RealTime()
+    if currentTime - lastToggleTime >= 0.1 then
+        if Lbox_Menu_Open == false then
+            Lbox_Menu_Open = true
+        elseif Lbox_Menu_Open == true then
+            Lbox_Menu_Open = false
+        end
+        lastToggleTime = currentTime
+    end
+end
+
+---@alias AimTarget { entity : Entity, angles : EulerAngles, factor : number }
+
+---@type boolean, lnxLib
+local libLoaded, lnxLib = pcall(require, "lnxLib")
+assert(libLoaded, "lnxLib not found, please install it!")
+assert(lnxLib.GetVersion() >= 0.987, "lnxLib version is too old, please update it!")
+
+local Math, Conversion = lnxLib.Utils.Math, lnxLib.Utils.Conversion
+local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
+local Helpers = lnxLib.TF2.Helpers
+local Prediction = lnxLib.TF2.Prediction
+local Fonts = lnxLib.UI.Fonts
+local Input = lnxLib.Utils.Input
+local Notify = lnxLib.UI.Notify
+
 local Hitbox = {
     Head = 1,
     Neck = 2,
@@ -17,11 +50,6 @@ local Hitbox = {
     Body = 5,
     Chest = 7,
     Feet = 11,
-}
-
-local AimModes = {
-    Leading = true,
-    Trailing = false,
 }
 
 local Menu = { -- this is the config that will be loaded every time u load the script
@@ -36,15 +64,17 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         Active = true,
         AimKey = KEY_LSHIFT,
         AimkeyName = "LSHIFT",
-        Is_Listening_For_Key = false,
         AutoShoot = true,
         Silent = true,
         SplashPrediction = true,
         AimPos = {
+            CurrentAimPos = Hitbox.Head,
             Hitscan = Hitbox.Head,
             Projectile = Hitbox.Feet
         },
         AimFov = 60,
+        MinDistance = 100,
+        MaxDistance = 1500,
         MinHitchance = 40,
     },
 
@@ -74,7 +104,6 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         NccPred = false
     },
 }
-
     -- Contains pairs of keys and their names
     ---@type table<integer, string>
     local KeyNames = {
@@ -191,55 +220,21 @@ end
 local status, loadedMenu = pcall(function() return assert(LoadCFG(string.format([[Lua %s]], Lua__fileName))) end) --auto load config
 
 if status then --ensure config is not causing errors
-    local allFunctionsExist = true
+    local allValuesExist = true
     for k, v in pairs(Menu) do
-        if type(v) == 'function' then
-            if not loadedMenu[k] or type(loadedMenu[k]) ~= 'function' then
-                allFunctionsExist = false
-                break
-            end
+        if loadedMenu[k] == nil then
+            allValuesExist = false
+            break
         end
     end
 
-    if allFunctionsExist then
+    if allValuesExist then
         Menu = loadedMenu
     else
         print("config is outdated")
         CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) --saving the config
     end
 end
-
-local menuLoaded, ImMenu = pcall(require, "ImMenu")
-assert(menuLoaded, "ImMenu not found, please install it!")
-assert(ImMenu.GetVersion() >= 0.66, "ImMenu version is too old, please update it!")
-
-local lastToggleTime = 0
-local Lbox_Menu_Open = true
-local function toggleMenu()
-    local currentTime = globals.RealTime()
-    if currentTime - lastToggleTime >= 0.1 then
-        if Lbox_Menu_Open == false then
-            Lbox_Menu_Open = true
-        elseif Lbox_Menu_Open == true then
-            Lbox_Menu_Open = false
-        end
-        lastToggleTime = currentTime
-    end
-end
-
----@alias AimTarget { entity : Entity, angles : EulerAngles, factor : number }
-
----@type boolean, lnxLib
-local libLoaded, lnxLib = pcall(require, "lnxLib")
-assert(libLoaded, "lnxLib not found, please install it!")
-assert(lnxLib.GetVersion() >= 0.987, "lnxLib version is too old, please update it!")
-
-local Math, Conversion = lnxLib.Utils.Math, lnxLib.Utils.Conversion
-local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
-local Helpers = lnxLib.TF2.Helpers
-local Prediction = lnxLib.TF2.Prediction
-local Fonts = lnxLib.UI.Fonts
-local Notify = lnxLib.UI.Notify
 
 local latency = 0
 local lerp = 0
@@ -249,7 +244,7 @@ local hitChance = 0
 local lastPosition = {}
 local priorPrediction = {}
 local vPath = {}
-local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
+local vHitbox = { Vector3(-22, -22, 0), Vector3(22, 22, 80) }
 local MAX_ANGLE_HISTORY = Menu.Advanced.StrafeSamples  -- Number of past angles to consider for averaging
 local MAX_CENTER_HISTORY = 5 -- Maximum number of center samples to consider for smoothing
 
@@ -439,7 +434,7 @@ end
 end]]
 
 local M_RADPI = 180 / math.pi
-local normalHitbox = { Vector3(-4, -4, -4), Vector3(4, 4, 4), Vector3(4, 4, 4)  }
+local DefaultHitbox = { Vector3(-0.2, -0.2, -0.2), Vector3(0.2, 0.2, 0.2)}
 -- Preliminary large hull check
 local largeHitbox = { Vector3(-4, -4, -4), Vector3(4, 4, 4), Vector3(4, 4, 50)  }
 
@@ -477,7 +472,6 @@ local function RotateVector(vector, angle)
 end
 
 -- Define the necessary variables
-local vel = Vector3(0, 0, 0)  -- Replace with the actual velocity
 local groundTrace = {}  -- Replace with the actual ground trace
 local vUp = Vector3(0, 0, 1)  -- Replace with the actual up vector
 local GROUND_COLLISION_ANGLE_LOW = 45  -- Replace with the actual value
@@ -515,184 +509,6 @@ local function handleGroundCollision(vel, groundTrace)
     if onGround then vel.z = 0 end
     return groundTrace.endpos, onGround
 end
-
--- Helper function to check path clearance
-local function checkPath2(dest, direction, angle, distance, origin, target)
-    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
-    local point = dest + RotateVector(direction, angle) * distance
-        --Forward Collision
-    local wallTrace = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_SHOT_HULL, shouldhitentiy)
-    if wallTrace.fraction < 1 then
-        point.x, point.y = handleForwardCollision(direction, wallTrace, Vector3(0, 0, 1))
-    end
-
-    -- Simulate a move in the direction of the adjusted velocity
-    --[[sHandle ground collision
-    groundTrace = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_SHOT_HULL)
-    local newPos, onGround = handleGroundCollision(direction, groundTrace, Vector3(0, 0, 1))
-
-    --If the player is on the ground, adjust the point
-    if onGround then
-        point = newPos
-    end]]
-
-    -- Check if the trace can hit the point from the origin
-    local trace = engine.TraceHull(origin, point, normalHitbox[1], normalHitbox[2], MASK_SHOT_HULL)
-
-    print(trace.fraction)
-    if trace.fraction > 0.9 then
-        projectileSimulation2 = trace.endpos
-        return true, trace.endpos
-    end
-end
-
--- Calculates the angle needed to hit a target with a projectile
----@param origin Vector3
----@param dest Vector3
----@param speed number
----@param gravity number
----@param sv_gravity number
----@return { angles: EulerAngles, time : number }?
-local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
-    local v = dest - origin
-    local v0 = speed
-    local v0_squared = v0 * v0
-    local g = sv_gravity * gravity
-    local shootpos = dest
-    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
-
-    local initialTrace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
-    local shouldUseDetailedHullTrace = initialTrace.fraction < 1 and initialTrace.entity ~= target
-
-    if g == 0 then
-        -- No gravity case
-        local time = v:Length() / v0
-        if time > timeToHit then
-            return false  -- Player will move out of range
-        end
-
-        -- Helper function to check path clearance
-        local function checkPath(direction, angle, distance)
-            local point = dest + RotateVector(direction, angle) * distance
-            point = (engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)).endpos
-            local trace = engine.TraceHull(origin, point, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-            return trace.fraction > 0.99 -- Check if the path is clears
-        end
-
-        -- Assuming RotateVector and NormalizeVector functions are defined
-        local trace = engine.TraceHull(origin, shootpos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID)
-        if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
-            if Menu.Main.SplashPrediction == true then
-                -- Collision with an object before reaching the target, try again with adjusted height
-                shootpos.z = shootpos.z + 72
-                trace = engine.TraceHull(origin, shootpos, normalHitbox[1], normalHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
-                
-                if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
-                    -- Adjusted height also blocked, return to original height and check left/right
-                    shootpos.z = shootpos.z - 72
-                    local direction = NormalizeVector(shootpos - origin)
-                    
-
-                    local angle = 90  -- Replace with the actual angle
-                    local distance = 150  -- Replace with the actual distance
-
-                    -- Check initial clearance for left and right
-                    local leftClear, Leftpoint = checkPath2(dest, direction, -90, distance, origin, target)
-                    local rightClear, Rightpoint = checkPath2(dest, direction, 90, distance, origin, target)
-
-                    -- Perform binary search on the clear side
-                    local side = leftClear == true and -90 or rightClear == true and 90
-                    if side then
-                        local minDistance = 0
-                        local maxDistance = 150
-                        local iterations = Menu.Advanced.SplashAccuracy
-                        for i = 1, iterations do
-                            local midDistance = (minDistance + maxDistance) / 2
-                            if checkPath(direction, side, midDistance) then
-                                maxDistance = midDistance
-                            else
-                                minDistance = midDistance
-                            end
-                        end
-                        shootpos = dest + RotateVector(direction, side) * maxDistance
-                    else
-                        -- Both left and right blocked
-                        return false
-                    end
-                end
-            else
-                return false
-            end
-        end
-
-        projectileSimulation = {origin}
-        table.insert(projectileSimulation, dest)
-        return { angles = Math.PositionAngles(origin, shootpos), time = time, Prediction = shootpos }
-    else
-        -- Ballistic arc calculation
-        local dx = v:Length2D()
-        local dy = v.z
-        local root = v0_squared * v0_squared - g * (g * dx * dx + 2 * dy * v0_squared)
-        if root < 0 then return nil end
-
-        local pitch = math.atan((v0_squared - math.sqrt(root)) / (g * dx))
-        local yaw = math.atan(v.y, v.x)
-
-        if isNaN(pitch) or isNaN(yaw) then return nil end
-
-        local angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI)
-        local timeToTarget = dx / (math.cos(pitch) * v0)
-
-        -- Adjusted simulation with segments and drag
-        local numSegments = Menu.Advanced.ProjectileSegments or 2
-        local segmentLength = timeToTarget / numSegments
-        local pos = origin
-        local trace
-        local currentVelocity = v0
-
-        -- Drag data
-        local drag = 1
-        local drag_basis = { 0.003902, 0.009962, 0.009962 }
-        local ang_drag_basis = { 0.003618, 0.001514, 0.001514 }
-
-        -- Calculate drag coefficient
-        local dragCoefficient = drag * (drag_basis[1] + drag_basis[2] + drag_basis[3] + ang_drag_basis[1] + ang_drag_basis[2] + ang_drag_basis[3])
-
-        -- Table to store positions
-        projectileSimulation = {pos}
-
-        for segment = 1, numSegments do
-            local t = segment * segmentLength
-
-            -- Apply drag to the velocity
-            currentVelocity = currentVelocity * (1 - dragCoefficient * t)
-
-            local x = currentVelocity * math.cos(pitch) * t
-            local y = currentVelocity * math.sin(pitch) * t - 0.5 * g * t * t
-            local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
-
-            if segment <= 10 or not shouldUseDetailedHullTrace then
-                trace = engine.TraceLine(pos, newPos, MASK_SHOT_HULL)
-            else
-                trace = engine.TraceHull(pos, newPos, normalHitbox[1], normalHitbox[2], MASK_SHOT_HULL)
-            end
-
-            -- Save position
-            table.insert(projectileSimulation, newPos)
-            if trace.fraction < 1 and trace.entity ~= target then
-                return false  -- Collision detected
-            end
-
-            pos = newPos
-        end
-
-        return { angles = angles, time = timeToTarget, Prediction = pos, Positions = positions }
-    end
-end
-
-
-
-
 
 
 
@@ -759,6 +575,194 @@ local function calculateHitChancePercentage(lastPredictedPos, currentPos)
     end
 end
 
+-- Helper function to check path clearance for side collisions
+local function checkPath2(dest, direction, angle, distance, origin, target)
+    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
+    local point = dest + RotateVector(direction, angle) * distance
+
+    local traceHull = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+
+    -- Check if the end point is within an acceptable range to the target
+    local distanceToTarget = (traceHull.endpos - dest):Length()
+    if distanceToTarget > distance then
+        return false, point  -- Point is too far from target
+    end
+
+    -- Check visibility from end point to target
+    local traceLine = engine.TraceLine(traceHull.endpos, dest, MASK_PLAYERSOLID, shouldhitentiy)
+    if traceLine.fraction < 1 then
+        return false, traceHull.endpos  -- Visibility is blocked
+    end
+
+    projectileSimulation2 = traceHull.endpos
+    return true, traceHull.endpos  -- Path is clear and within range
+end
+
+-- Function to find the best shooting position
+local function FindBestShootingPosition(origin, dest, target, shouldhitentiy)
+
+    -- Helper function to check path clearance
+    local function checkPath(direction, angle, distance, origin, dest)
+        shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
+        local point = dest + RotateVector(direction, angle) * distance
+
+        -- Perform hull trace from dest to the point
+        local traceHullDestToPoint = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+        point = traceHullDestToPoint.endpos
+
+        -- Perform hull trace from origin to the point
+        local traceHullOriginToPoint = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID)
+        local isPathClear = traceHullOriginToPoint.fraction > 0.99
+
+        return isPathClear, point  -- Return whether the path is clear and the actual end position
+    end
+
+    local trace = engine.TraceHull(origin, dest, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+    if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
+        local direction = NormalizeVector(dest - origin)
+
+        local leftClear, leftPoint = checkPath2(dest, direction, -90, 150, origin, target)
+        local rightClear, rightPoint = checkPath2(dest, direction, 90, 150, origin, target)
+
+        local searchSide, maxDistancePoint = leftClear and -90 or rightClear and 90, leftClear and leftPoint or rightClear and rightPoint
+        if searchSide and maxDistancePoint then
+            local minDistance = 0
+            local maxDistance = (maxDistancePoint - dest):Length()
+            local iterations = Menu.Advanced.SplashAccuracy
+            local bestPoint = nil
+            local bestDistance = math.huge
+
+            for i = 1, iterations do
+                local midDistance = (minDistance + maxDistance) / 2
+                local midClear, midPoint = checkPath(direction, searchSide, midDistance, origin, dest)
+
+                if midClear then
+                    local distanceToTarget = (midPoint - dest):Length()
+                    if distanceToTarget < bestDistance then
+                        bestDistance = distanceToTarget
+                        bestPoint = midPoint
+                    end
+                    minDistance = midDistance
+                else
+                    maxDistance = midDistance
+                end
+            end
+
+            if bestPoint then
+                return bestPoint
+            else
+                return false
+            end
+        else
+            return false
+        end
+    end
+
+    return dest
+end
+
+-- Calculates the angle needed to hit a target with a projectile
+---@param origin Vector3
+---@param dest Vector3
+---@param speed number
+---@param gravity number
+---@param sv_gravity number
+---@return { angles: EulerAngles, time : number }?
+local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
+    local v = dest - origin
+    local v0 = speed
+    local v0_squared = v0 * v0
+    local g = sv_gravity * gravity
+    local shootpos = dest
+    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() or entity:GetTeamNumber() ~= target:GetTeamNumber() end
+
+    local initialTrace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
+    local shouldUseDetailedHullTrace = initialTrace.fraction < 1 and initialTrace.entity ~= target
+
+    if g == 0 then -- No gravity case
+        local time = v:Length() / v0
+        if time > timeToHit then
+            return false  -- Projectile will flly out of range
+        end
+
+        -- if path is clear
+        local trace = engine.TraceHull(origin, shootpos, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+        if trace.fraction ~= 1 and trace.entity:GetName() ~= target:GetName() then
+            return false
+        end
+
+        projectileSimulation = {origin}
+        table.insert(projectileSimulation, dest)
+        return { angles = Math.PositionAngles(origin, shootpos), time = time, Prediction = shootpos }
+    else -- Ballistic arc calculation
+
+        local dx = v:Length2D()
+        local dy = v.z
+        local root = v0_squared * v0_squared - g * (g * dx * dx + 2 * dy * v0_squared)
+        if root < 0 then return nil end
+
+        local pitch = math.atan((v0_squared - math.sqrt(root)) / (g * dx))
+        local yaw = math.atan(v.y, v.x)
+
+        if isNaN(pitch) or isNaN(yaw) then return nil end
+
+        local angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI)
+        local timeToTarget = dx / (math.cos(pitch) * v0)
+
+        -- Adjusted simulation with segments and drag
+        local numSegments = Menu.Advanced.ProjectileSegments or 2
+        local segmentLength = timeToTarget / numSegments
+        local pos = origin
+        local trace
+        local currentVelocity = v0
+
+        -- Drag data
+        local drag = 1
+        local drag_basis = { 0.003902, 0.009962, 0.009962 }
+        local ang_drag_basis = { 0.003618, 0.001514, 0.001514 }
+
+        -- Calculate drag coefficient
+        local dragCoefficient = drag * (drag_basis[1] + drag_basis[2] + drag_basis[3] + ang_drag_basis[1] + ang_drag_basis[2] + ang_drag_basis[3])
+
+        -- Table to store positions
+        projectileSimulation = {pos}
+
+        for segment = 1, numSegments do
+            local t = segment * segmentLength
+
+            -- Apply drag to the velocity
+            currentVelocity = currentVelocity * (1 - dragCoefficient * t)
+
+            local x = currentVelocity * math.cos(pitch) * t
+            local y = currentVelocity * math.sin(pitch) * t - 0.5 * g * t * t
+            local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
+
+            if segment <= 10 or not shouldUseDetailedHullTrace then
+                trace = engine.TraceLine(pos, newPos, MASK_SHOT_HULL, shouldhitentiy)
+            else
+                trace = engine.TraceHull(pos, newPos, DefaultHitbox[1], DefaultHitbox[2], MASK_SHOT_HULL, shouldhitentiy)
+            end
+
+            -- Save position
+            table.insert(projectileSimulation, newPos)
+            if trace.fraction < 1 and trace.entity ~= target then
+                return false  -- Collision detected
+            end
+
+            pos = newPos
+        end
+
+        return { angles = angles, time = timeToTarget, Prediction = pos, Positions = positions }
+    end
+end
+
+--Returns whether the player is on the ground
+---@return boolean
+local function IsOnGround(player)
+    local pFlags = player:GetPropInt("m_fFlags")
+    return (pFlags & FL_ONGROUND) == 1
+end
+
 local shouldPredict = true
 
 -- Main function
@@ -772,9 +776,9 @@ local function CheckProjectileTarget(me, weapon, player)
     local strafeAngle = Menu.Advanced.StrafePrediction and strafeAngles[player:GetIndex()] or nil
     local vStep = Vector3(0, 0, stepSize / 2)
     vPath = {}
-    local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), player:IsOnGround()
+    local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), IsOnGround(player)
     local currpos
-    local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() end --trace ignore simulated player 
+    local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber() end --trace ignore simulated player 
 
     -- Check initial conditions
     local projInfo = weapon:GetProjectileInfo()
@@ -811,14 +815,14 @@ local function CheckProjectileTarget(me, weapon, player)
         -- Forward Collision
         local wallTrace = engine.TraceHull(lastP + vStep, pos + vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldHitEntity)
         if wallTrace.fraction < 1 then
-            pos.x, pos.y = handleForwardCollision(vel, wallTrace, vUp)
+            pos.x, pos.y = handleForwardCollision(vel, wallTrace)
         end
 
         -- Ground Collision
         local downStep = onGround and vStep or Vector3()
-        local groundTrace = engine.TraceHull(pos + vStep, pos - downStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldHitEntity)
+        groundTrace = engine.TraceHull(pos + vStep, pos - downStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldHitEntity)
         if groundTrace.fraction < 1 then
-            pos, onGround = handleGroundCollision(vel, groundTrace, vUp)
+            pos, onGround = handleGroundCollision(vel, groundTrace)
         else
             onGround = false
         end
@@ -848,16 +852,28 @@ local function CheckProjectileTarget(me, weapon, player)
         end
 
         local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
-        if not solution then goto continue end
-        if solution == false then return nil end
+        if solution == nil then goto continue end
+        if solution == false then
+            if Menu.Main.SplashPrediction then
+                
+                local bestPos = FindBestShootingPosition(shootPos, pos, player, shouldHitEntity)
+                print(bestPos)
+                if bestPos then
+                    solution = SolveProjectile(shootPos, bestPos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
+                end
+                if solution == false then return nil end
+            else
+                return nil
+            end
+        end
 
-        fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
-        if fov > Menu.Main.AimFov then goto continue end
+        --[[fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
+        if fov > Menu.Main.AimFov then goto continue end]]
 
         local time = solution.time + latency + lerp
         local ticks = Conversion.Time_to_Ticks(time) + 1
         if ticks > i then goto continue end
-        
+
         --if (solution.prediction - pos):Length() > 150 then goto continue end
         targetAngles = solution.angles
         break
@@ -871,6 +887,13 @@ local function CheckProjectileTarget(me, weapon, player)
     return { entity = player, angles = targetAngles, factor = fov, Prediction = vPath[#vPath] }
 end
 
+local function GetHitboxPos(player, hitboxID)
+    local hitbox = player:GetHitboxes()[hitboxID]
+    if not hitbox then return nil end
+
+    return (hitbox[1] + hitbox[2]) * 0.5
+end
+
 -- Finds the best position for hitscan weapons
 ---@param me WPlayer
 ---@param weapon WWeapon
@@ -878,53 +901,39 @@ end
 ---@return AimTarget?
 local function CheckHitscanTarget(me, weapon, player)
     -- FOV Check
-    local aimPos = player:GetHitboxPos(Menu.Main.AimPos.Hitscan)
+    local aimPos = GetHitboxPos(player, Menu.Main.AimPos.Hitscan)
     if not aimPos then return nil end
     local angles = Math.PositionAngles(me:GetEyePos(), aimPos)
     local fov = Math.AngleFov(angles, engine.GetViewAngles())
 
     -- Visiblity Check
-    if not Helpers.VisPos(player:Unwrap(), me:GetEyePos(), aimPos) then return nil end
+    if not Helpers.VisPos(player, WPlayer:GetLocal():GetViewPos(), GetHitboxPos(player, Menu.Main.AimPos.Hitscan) or Vector3(10,10,-110)) then return nil end
 
     -- The target is valid
     local target = { entity = player, angles = angles, factor = fov }
     return target
 end
 
--- Checks the given target for the given weapon
----@param me WPlayer
----@param weapon WWeapon
----@param entity Entity
----@return AimTarget?
-local function CheckTarget(me, weapon, entity)
-    if not entity then return nil end
-    if not entity:IsAlive() then return nil end
-    if entity:GetTeamNumber() == me:GetTeamNumber() then return nil end
-
-    local player = WPlayer.FromEntity(entity)
-
-    if weapon:IsShootingWeapon() then
-        -- TODO: Improve this
-
-        local projType = weapon:GetWeaponProjectileType()
-        if projType == 1 then
-            -- Hitscan weapon
-            return CheckHitscanTarget(me, weapon, player)
-        else
-            -- Projectile weapon
-            return CheckProjectileTarget(me, weapon, player)
-        end
-    --[[elseif weapon:IsMeleeWeapon() then
-        -- TODO: Melee Aimbot]]
-    end
-
-    return nil
-end
-
 local function GetBestTarget(me, weapon)
     local players = entities.FindByClass("CTFPlayer")
     local bestTarget = nil
-    local bestFov = 360
+    local bestFactor = 0
+    local localPlayerOrigin = me:GetAbsOrigin()
+    local localPlayerViewAngles = engine.GetViewAngles()
+
+    if weapon:IsShootingWeapon() then
+        local projType = weapon:GetWeaponProjectileType()
+            if projType == 1 then
+                -- Hitscan weapon
+                Menu.Main.AimPos.CurrentAimPos = Menu.Main.AimPos.Hitscan
+            else
+                -- Projectile weapon
+                Menu.Main.AimPos.CurrentAimPos = Menu.Main.AimPos.Projectile
+            end
+    else
+        return nil
+    end
+
 
     for _, player in pairs(players) do
         if player == nil or not player:IsAlive()
@@ -933,39 +942,62 @@ local function GetBestTarget(me, weapon)
         or gui.GetValue("ignore cloaked") == 1 and player:InCond(4) then
             goto continue
         end
-        
-        local angles = Math.PositionAngles(me:GetAbsOrigin(), player:GetAbsOrigin())
-        local fov = Math.AngleFov(angles, engine.GetViewAngles())
-        
+
+        local aimPos = GetHitboxPos(player, Menu.Main.AimPos.CurrentAimPos)
+
+        local playerOrigin = player:GetAbsOrigin()
+        local distance = math.abs(playerOrigin.x - localPlayerOrigin.x) +
+                         math.abs(playerOrigin.y - localPlayerOrigin.y) +
+                         math.abs(playerOrigin.z - localPlayerOrigin.z)
+
+        local angles = Math.PositionAngles(localPlayerOrigin, playerOrigin)
+        local fov = Math.AngleFov(angles, localPlayerViewAngles)
+
         if fov > Menu.Main.AimFov then
             goto continue
         end
 
-        if fov <= bestFov then
+        --local distanceFactor = Math.RemapValClamped(distance, Menu.Main.MinDistance, Menu.Main.MaxDistance, 1, 0.09)
+        local fovFactor = Math.RemapValClamped(fov, 0, Menu.Main.AimFov, 1, 0.7)
+        local isVisible = Helpers.VisPos(player, localPlayerOrigin + Vector3(0,0,75), playerOrigin + Vector3(0,0,75))
+        local visibilityFactor = isVisible and 1.0 or 0.5
+        local factor = fovFactor * visibilityFactor --* distanceFactor
+
+        if factor > bestFactor then
             bestTarget = player
-            bestFov = fov
+            bestFactor = factor
         end
 
         ::continue::
     end
 
     if bestTarget then
-        bestTarget = CheckTarget(me, weapon, bestTarget)
+            -- TODO: Improve this
+            if projType == 1 then
+                -- Hitscan weapon
+                return CheckHitscanTarget(me, weapon, bestTarget)
+            else
+                -- Projectile weapon
+                return CheckProjectileTarget(me, weapon, bestTarget)
+            end
+            --[[elseif weapon:IsMeleeWeapon() then
+            -- TODO: Melee Aimbot]]
+            return bestTarget
     else
         return nil
     end
-    
-    return bestTarget
 end
 
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-    if Menu.Main.AimKey == MOUSE_1 and Menu.Main.AutoShoot and input.IsButtonDown(Menu.Main.AimKey) then
+    if Menu.Main.AimKey == 107 and Menu.Main.AutoShoot then
         userCmd:SetButtons(userCmd:GetButtons() & ~IN_ATTACK)
     end
+
     if not input.IsButtonDown(Menu.Main.AimKey) then
         return
     end
+
     projectileSimulation2 = nil
     local me = WPlayer.GetLocal()
     local pLocal = entities.GetLocalPlayer()
@@ -992,13 +1024,6 @@ local function OnCreateMove(userCmd)
         return
     end
 
-    --[[validate aimpos
-
-    local angles = Math.PositionAngles(me:GetAbsOrigin(), currentTarget.Prediction)
-    local fov = Math.AngleFov(angles, currentTarget.angles)
-    
-    if fov > 20 then return nil end -- skip if shooting random stuff]] 
-
     -- Aim at the target
     userCmd:SetViewAngles(currentTarget.angles:Unpack())
     if not Menu.Main.Silent then
@@ -1009,8 +1034,8 @@ local function OnCreateMove(userCmd)
     if Menu.Main.AutoShoot then
         if currentTarget == nil then return end
 
-        if weapon:GetWeaponID() == TF_WEAPON_COMPOUND_BOW
-        or weapon:GetWeaponID() == TF_WEAPON_PIPEBOMBLAUNCHER then
+        if weapon:GetWeaponID() == TF_WEAPON_COMPOUND_BOW then
+        --or weapon:GetWeaponID() == TF_WEAPON_PIPEBOMBLAUNCHER then
             -- Huntsman
             if weapon:GetChargeBeginTime() > 0 then
                 userCmd.buttons = userCmd.buttons & ~IN_ATTACK
@@ -1083,6 +1108,33 @@ local clear_lines = 0
 local bindTimer = 0
 local bindDelay = 0.15  -- Delay of 0.2 seconds
 
+local function handleKeybind(noKeyText, keybind, keybindName)
+    if KeybindName ~= "Press The Key" and ImMenu.Button(KeybindName or noKeyText) then
+        bindTimer = os.clock() + bindDelay
+        KeybindName = "Press The Key"
+    elseif KeybindName == "Press The Key" then
+        ImMenu.Text("Press the key")
+    end
+
+    if KeybindName == "Press The Key" then
+        if os.clock() >= bindTimer then
+            local pressedKey = GetPressedKey()
+            if pressedKey then
+                if pressedKey == KEY_ESCAPE then
+                    -- Reset keybind if the Escape key is pressed
+                    keybind = 0
+                    KeybindName = "Always On"
+                else
+                    -- Update keybind with the pressed key
+                    keybind = pressedKey
+                    KeybindName = GetKeyName(pressedKey)
+                    Notify.Simple("Keybind Success", "Bound Key: " .. KeybindName, 2)
+                end
+            end
+        end
+    end
+    return keybind, keybindName
+end
 
 local function OnDraw()
     local PredTicks = Menu.Advanced.PredTicks
@@ -1327,42 +1379,6 @@ local function OnDraw()
         ImMenu.EndFrame()
 
         if Menu.tabs.Main then
-            ImMenu.BeginFrame(1)
-            ImMenu.Text("Keybind: ")
-            if Menu.Main.AimkeyName ~= "Press The Key" and ImMenu.Button(Menu.Main.AimkeyName) then
-                Menu.Main.Is_Listening_For_Key = not Menu.Main.Is_Listening_For_Key
-                if Menu.Main.Is_Listening_For_Key then
-                    bindTimer = os.clock() + bindDelay
-                    Menu.Main.AimkeyName = "Press The Key"
-                else
-                    Menu.Main.AimkeyName = "Always On"
-                end
-            elseif Menu.Main.AimkeyName == "Press The Key" then
-                ImMenu.Text("Press the key")
-            end
-
-            if Menu.Main.Is_Listening_For_Key then
-                if os.clock() >= bindTimer then
-                    local pressedKey = GetPressedKey()
-                    if pressedKey then
-                        if pressedKey == KEY_ESCAPE then
-                            -- Reset keybind if the Escape key is pressed
-                            Menu.Main.AimkeyName = "Always On"
-                            Menu.Main.Is_Listening_For_Key = false
-                        else
-                            -- Update keybind with the pressed key
-                            local keyName = GetKeyName(pressedKey) or ""
-                            print("Key name: ", keyName)
-                            Menu.Main.AimkeyName = string.gsub(keyName, "Key_", "")
-                            Menu.Main.AimKey = pressedKey
-                            print("Keybind Success", "Bound Key: " .. Menu.Main.AimKey)
-                            Menu.Main.Is_Listening_For_Key = false
-                        end
-                    end
-                end
-            end
-            ImMenu.EndFrame()
-
             --[[ImMenu.BeginFrame(1)
             Menu.Main.Active = ImMenu.Checkbox("Active", Menu.Main.Active)
             ImMenu.EndFrame()]]
@@ -1380,11 +1396,15 @@ local function OnDraw()
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            Menu.Main.AimFov = ImMenu.Slider("Fov", Menu.Main.AimFov , 0.1, 360)
+            Menu.Main.AimFov = ImMenu.Slider("Fov", Menu.Main.AimFov , 0.1, 360, 0.1)
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
             Menu.Main.MinHitchance = ImMenu.Slider("Min Hitchance", Menu.Main.MinHitchance , 1, 100)
+            ImMenu.EndFrame()
+
+            ImMenu.BeginFrame(1)
+                Menu.Main.AimKey, Menu.Main.AimkeyName = handleKeybind("Aim Key: ", Menu.Main.AimKey, Menu.Main.AimkeyName)
             ImMenu.EndFrame()
 
             --[[ImMenu.BeginFrame(1)
@@ -1464,14 +1484,14 @@ local function OnDraw()
 end
 
 local function PropUpdate()
-    local pLocal = entities.GetLocalPlayer()
+    --[[local pLocal = entities.GetLocalPlayer()
     if not input.IsButtonDown(KEY_RSHIFT) then
         return
     end
-    --[143 and 210 are indle for unscoped and scoped
+    --143 and 210 are indle for unscoped and scoped
 
 
-    for i = 1, entities.GetHighestEntityIndex() do -- index 1 is world entity
+    --for i = 1, entities.GetHighestEntityIndex() do -- index 1 is world entity
         local entity = entities.GetByIndex( i )
         if entity then
             --print( i, entity:GetClass() )
@@ -1491,9 +1511,9 @@ local function PropUpdate()
     local viewmodel = entities.FindByClass("CTFViewModel")[54]
     --print(viewmodel)
 
-    --[[for i = 0, 23 do
+    --for i = 0, 23 do
         pLocal:SetPropDataTableFloat(100, i, "m_flPoseParameter")
-    end]]
+    end
     local viewmodelData =  pLocal:GetPropDataTableFloat("m_flPoseParameter") --213 reload no scope , 211 reload scope, 
     --printLuaTable(viewmodelData)
 
@@ -1505,7 +1525,7 @@ local function PropUpdate()
     --pLocal:SetPropVector(Vector3(10000, 10000, 100000), "m_bDrawViewmodel")
  
     --pLocal:SetPropInt(1000, "m_Resolution")
-    --local resolution =  pLocal:GetPropVector("m_Resolution") --213 reload no scope , 211 reload scope, 
+    --local resolution =  pLocal:GetPropVector("m_Resolution") --213 reload no scope , 211 reload scope, ]]
  
 end
 
