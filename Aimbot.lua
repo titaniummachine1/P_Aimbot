@@ -581,60 +581,82 @@ local function checkPath2(dest, direction, angle, distance, origin, target)
     local point = dest + RotateVector(direction, angle) * distance
 
     local traceHull = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+    traceHull = engine.TraceHull(point, point + Vector3(0, 0, -100), DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
 
     -- Check if the end point is within an acceptable range to the target
     local distanceToTarget = (traceHull.endpos - dest):Length()
     if distanceToTarget > distance then
-        return false, point  -- Point is too far from target
+        local excessDistance = distanceToTarget - distance
+        local directionToDest = NormalizeVector(traceHull.endpos - dest)
+        traceHull.endpos = traceHull.endpos + directionToDest * excessDistance
     end
 
     -- Check visibility from end point to target
-    local traceLine = engine.TraceLine(traceHull.endpos, dest, MASK_PLAYERSOLID, shouldhitentiy)
-    if traceLine.fraction < 1 then
-        return false, traceHull.endpos  -- Visibility is blocked
+    local traceLine = engine.TraceLine(traceHull.endpos, dest, MASK_PLAYERSOLID)
+    if traceLine.fraction > 0.9 then
+        return false
     end
 
-    projectileSimulation2 = traceHull.endpos
     return true, traceHull.endpos  -- Path is clear and within range
 end
 
 -- Function to find the best shooting position
-local function FindBestShootingPosition(origin, dest, target, shouldhitentiy)
-
+local function FindBestShootingPosition(origin, dest, target, BlastRadious, shouldhitentiy)
     -- Helper function to check path clearance
-    local function checkPath(direction, angle, distance, origin, dest)
+    local function checkPath(direction, angle, distance)
         shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
         local point = dest + RotateVector(direction, angle) * distance
 
         -- Perform hull trace from dest to the point
-        local traceHullDestToPoint = engine.TraceHull(dest, point, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+        local traceHullDestToPoint = engine.TraceHull(dest, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
         point = traceHullDestToPoint.endpos
 
         -- Perform hull trace from origin to the point
         local traceHullOriginToPoint = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID)
-        local isPathClear = traceHullOriginToPoint.fraction > 0.99
-
-        return isPathClear, point  -- Return whether the path is clear and the actual end position
+        return traceHullOriginToPoint.fraction > 0.9, point  -- Return whether the path is clear and the actual end position
     end
 
     local trace = engine.TraceHull(origin, dest, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
     if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
         local direction = NormalizeVector(dest - origin)
 
-        local leftClear, leftPoint = checkPath2(dest, direction, -90, 150, origin, target)
-        local rightClear, rightPoint = checkPath2(dest, direction, 90, 150, origin, target)
+        local leftClear, leftMaxPoint = checkPath2(dest, direction, -90, BlastRadious, origin, target)
+        local rightClear, rightMaxPoint = checkPath2(dest, direction, 90, BlastRadious, origin, target)
 
-        local searchSide, maxDistancePoint = leftClear and -90 or rightClear and 90, leftClear and leftPoint or rightClear and rightPoint
+        local searchSide = nil
+        local maxDistancePoint = nil
+
+        -- Determine which side to search based on clearance and distance to target
+        if leftClear or rightClear then
+            if leftClear and rightClear then
+                local leftDistance = (leftMaxPoint - dest):Length()
+                local rightDistance = (rightMaxPoint - dest):Length()
+                if leftDistance < rightDistance then
+                    searchSide = -90
+                    maxDistancePoint = leftMaxPoint
+                else
+                    searchSide = 90
+                    maxDistancePoint = rightMaxPoint
+                end
+            elseif leftClear then
+                searchSide = -90
+                maxDistancePoint = leftMaxPoint
+            else
+                searchSide = 90
+                maxDistancePoint = rightMaxPoint
+            end
+        end
+
         if searchSide and maxDistancePoint then
             local minDistance = 0
             local maxDistance = (maxDistancePoint - dest):Length()
-            local iterations = Menu.Advanced.SplashAccuracy
+            local iterations = 5
             local bestPoint = nil
             local bestDistance = math.huge
 
             for i = 1, iterations do
                 local midDistance = (minDistance + maxDistance) / 2
-                local midClear, midPoint = checkPath(direction, searchSide, midDistance, origin, dest)
+                local midClear, midPoint = checkPath(direction, searchSide, midDistance)
 
                 if midClear then
                     local distanceToTarget = (midPoint - dest):Length()
@@ -649,6 +671,7 @@ local function FindBestShootingPosition(origin, dest, target, shouldhitentiy)
             end
 
             if bestPoint then
+                projectileSimulation2 = bestPoint
                 return bestPoint
             else
                 return false
@@ -686,7 +709,7 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
         end
 
         -- if path is clear
-        local trace = engine.TraceHull(origin, shootpos, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
+        local trace = engine.TraceHull(origin, shootpos, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID)
         if trace.fraction ~= 1 and trace.entity:GetName() ~= target:GetName() then
             return false
         end
@@ -779,6 +802,7 @@ local function CheckProjectileTarget(me, weapon, player)
     local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), IsOnGround(player)
     local currpos
     local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber() end --trace ignore simulated player 
+    local BlastRadious = 150
 
     -- Check initial conditions
     local projInfo = weapon:GetProjectileInfo()
@@ -853,28 +877,30 @@ local function CheckProjectileTarget(me, weapon, player)
 
         local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
         if solution == nil then goto continue end
+
         if solution == false then
-            if Menu.Main.SplashPrediction then
-                
-                local bestPos = FindBestShootingPosition(shootPos, pos, player, shouldHitEntity)
+            if Menu.Main.SplashPrediction and projInfo[2] == 0 then
+                local bestPos = FindBestShootingPosition(shootPos, pos, player, BlastRadious, shouldHitEntity)
                 print(bestPos)
                 if bestPos then
                     solution = SolveProjectile(shootPos, bestPos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
                 end
-                if solution == false then return nil end
+                --if solution == false then return nil end
             else
                 return nil
             end
         end
 
-        --[[fov = Math.AngleFov(solution.angles, engine.GetViewAngles())
-        if fov > Menu.Main.AimFov then goto continue end]]
+        local time
+        if solution and solution.time then
+            time = solution.time + latency + lerp
+        else
+            return nil
+        end
 
-        local time = solution.time + latency + lerp
         local ticks = Conversion.Time_to_Ticks(time) + 1
         if ticks > i then goto continue end
 
-        --if (solution.prediction - pos):Length() > 150 then goto continue end
         targetAngles = solution.angles
         break
         ::continue::
@@ -957,11 +983,11 @@ local function GetBestTarget(me, weapon)
             goto continue
         end
 
-        --local distanceFactor = Math.RemapValClamped(distance, Menu.Main.MinDistance, Menu.Main.MaxDistance, 1, 0.09)
+        local distanceFactor = Math.RemapValClamped(distance, 100, 1500, 1, 0.09)
         local fovFactor = Math.RemapValClamped(fov, 0, Menu.Main.AimFov, 1, 0.7)
         local isVisible = Helpers.VisPos(player, localPlayerOrigin + Vector3(0,0,75), playerOrigin + Vector3(0,0,75))
-        local visibilityFactor = isVisible and 1.0 or 0.5
-        local factor = fovFactor * visibilityFactor --* distanceFactor
+        local visibilityFactor = isVisible and 1 or 0.5
+        local factor = fovFactor * visibilityFactor * distanceFactor
 
         if factor > bestFactor then
             bestTarget = player
