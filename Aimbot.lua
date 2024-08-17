@@ -75,6 +75,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
         MinDistance = 100,
         MaxDistance = 1500,
         MinHitchance = 40,
+        closeHitChance = 40,
     },
 
     Advanced = {
@@ -190,7 +191,7 @@ local function CreateCFG(folder_name, table)
             result = result .. string.rep("    ", level) .. "}"
             return result
         end
-        
+
         local serializedConfig = serializeTable(table)
         file:write(serializedConfig)
         file:close()
@@ -217,23 +218,39 @@ local function LoadCFG(folder_name)
     end
 end
 
-local status, loadedMenu = pcall(function() return assert(LoadCFG(string.format([[Lua %s]], Lua__fileName))) end) --auto load config
+local status, loadedMenu = pcall(function() 
+    return assert(LoadCFG(string.format([[Lua %s]], Lua__fileName))) 
+end) -- Auto-load config
 
-if status then --ensure config is not causing errors
-    local allValuesExist = true
-    for k, v in pairs(Menu) do
-        if loadedMenu[k] == nil then
-            allValuesExist = false
-            break
+-- Function to check if all expected functions exist in the loaded config
+local function checkAllFunctionsExist(expectedMenu, loadedMenu)
+    for key, value in pairs(expectedMenu) do
+        if type(value) == 'function' then
+            -- Check if the function exists in the loaded menu and has the correct type
+            if not loadedMenu[key] or type(loadedMenu[key]) ~= 'function' then
+                return false
+            end
         end
     end
+    for key, value in pairs(expectedMenu) do
+        if not loadedMenu[key] or type(loadedMenu[key]) ~= type(value) then
+            return false
+        end
+    end
+    return true
+end
 
-    if allValuesExist then
+-- Execute this block only if loading the config was successful
+if status then
+    if checkAllFunctionsExist(Menu, loadedMenu) and not input.IsButtonDown(KEY_LSHIFT) then
         Menu = loadedMenu
     else
-        print("config is outdated")
-        CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) --saving the config
+        print("Config is outdated or invalid. Creating a new config.")
+        CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) -- Save the config
     end
+else
+    print("Failed to load config. Creating a new config.")
+    CreateCFG(string.format([[Lua %s]], Lua__fileName), Menu) -- Save the config
 end
 
 local latency = 0
@@ -551,110 +568,118 @@ end]]
 
 local function calculateHitChancePercentage(lastPredictedPos, currentPos)
     if not lastPredictedPos then
-        print("lastPosiion is NiLL ~~!!!!")
+        print("lastPosition is NIL ~~!!!!")
         return 0
     end
+    
+    -- Calculate horizontal distance (2D distance on the X-Y plane)
     local horizontalDistance = math.sqrt((currentPos.x - lastPredictedPos.x)^2 + (currentPos.y - lastPredictedPos.y)^2)
-
-    local verticalDistanceUp = currentPos.z - lastPredictedPos.z + 10
-
-    local verticalDistanceDown = (lastPredictedPos.z - currentPos.z) - 10
     
-    -- You can adjust these values based on game's mechanics
-    local maxHorizontalDistance = 16
-    local maxVerticalDistanceUp = 45
-    local maxVerticalDistanceDown = 0
+    -- Calculate vertical distance with an allowance for vertical movement
+    local verticalDistance = math.abs(currentPos.z - lastPredictedPos.z)
     
-    if horizontalDistance > maxHorizontalDistance or verticalDistanceUp > maxVerticalDistanceUp or verticalDistanceDown > maxVerticalDistanceDown then
-        return 0 -- No chance to hit
-    else
-        local horizontalHitChance = 100 - (horizontalDistance / maxHorizontalDistance) * 100
-        local verticalHitChance = 100 - (verticalDistanceUp / maxVerticalDistanceUp) * 100
-        local overallHitChance = (horizontalHitChance + verticalHitChance) / 2
-        return overallHitChance
-    end
+    -- Define maximum acceptable distances
+    local maxHorizontalDistance = 12  -- Max acceptable horizontal distance in units
+    local maxVerticalDistance = 45    -- Max acceptable vertical distance in units
+    
+    -- Normalize the distances to a 0-1 scale
+    local horizontalFactor = math.min(horizontalDistance / maxHorizontalDistance, 1)
+    local verticalFactor = math.min(verticalDistance / maxVerticalDistance, 1)
+    
+    -- Calculate the hit chance as a percentage
+    local overallFactor = (horizontalFactor + verticalFactor) / 2
+    
+    -- Convert to a percentage where 100% is perfect and 0% is a miss
+    local hitChancePercentage = (1 - overallFactor) * 100
+    
+    return hitChancePercentage
 end
 
+
 -- Helper function to check path clearance for side collisions
-local function checkPath2(dest, direction, angle, distance, origin, target)
-    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
+local function checkPathClearance(dest, direction, angle, distance, origin, target)
+    -- Function to determine if an entity should be hit
+    local shouldhitentity = function(entity) return entity:GetIndex() ~= target:GetIndex() end
+
+    -- Calculate the point based on direction and angle
     local point = dest + RotateVector(direction, angle) * distance
 
-    local traceHull = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
-    traceHull = engine.TraceHull(point, point + Vector3(0, 0, -100), DefaultHitbox[1] + Vector3(1,1,1), DefaultHitbox[2] - Vector3(1,1,1), MASK_PLAYERSOLID, shouldhitentiy)
+    -- Perform a trace line from origin to the calculated point
+    local traceLine = engine.TraceLine(origin, point, 100679691, shouldhitentity)
+
+    -- Perform a trace line downwards from the calculated point to ensure it's on solid ground
+    local traceDown = engine.TraceLine(point, point + Vector3(0, 0, -100), 100679691, shouldhitentity)
 
     -- Check if the end point is within an acceptable range to the target
-    local distanceToTarget = (traceHull.endpos - dest):Length()
+    local distanceToTarget = (traceDown.endpos - dest):Length()
     if distanceToTarget > distance then
         local excessDistance = distanceToTarget - distance
-        local directionToDest = NormalizeVector(traceHull.endpos - dest)
-        traceHull.endpos = traceHull.endpos + directionToDest * excessDistance
+        local directionToDest = NormalizeVector(traceDown.endpos - dest)
+        traceDown.endpos = traceDown.endpos + directionToDest * excessDistance
     end
 
-    -- Check visibility from end point to target
-    local traceLine = engine.TraceLine(origin, dest, MASK_PLAYERSOLID)
-    if traceLine.fraction > 0.9 then
+    -- Perform a final visibility check from the origin to the destination
+    local visibilityCheck = engine.TraceLine(origin, dest, 100679691, shouldhitentity)
+    if visibilityCheck.fraction > 0.9 then
         return false
     end
 
-    return true, traceHull.endpos  -- Path is clear and within range
+    return true, traceDown.endpos  -- Path is clear and within range
 end
 
 -- Function to find the best shooting position
-local function FindBestShootingPosition(origin, dest, target, BlastRadious, shouldhitentiy)
-    -- Helper function to check path clearance
+local function FindBestShootingPosition(origin, dest, target, BlastRadius)
+    -- Helper function to check path clearance in a given direction and angle
     local function checkPath(direction, angle, distance)
-        shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() end
         local point = dest + RotateVector(direction, angle) * distance
 
-        -- Perform hull trace from dest to the point
-        local traceHullDestToPoint = engine.TraceHull(dest, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
-        point = traceHullDestToPoint.endpos
+        -- Perform a trace line from origin to the point
+        local traceLineOriginToPoint = engine.TraceLine(origin, point, 100679691, function(entity) return entity:GetIndex() ~= target:GetIndex() end)
 
-        -- Perform hull trace from origin to the point
-        local traceHullOriginToPoint = engine.TraceHull(origin, point, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID)
-        return traceHullOriginToPoint.fraction > 0.9, point  -- Return whether the path is clear and the actual end position
+        -- Return whether the path is clear and the actual end position
+        return traceLineOriginToPoint.fraction > 0.9, traceLineOriginToPoint.endpos
     end
 
-    local trace = engine.TraceHull(origin, dest, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID, shouldhitentiy)
-    if trace.fraction < 1 and trace.entity:GetName() ~= target:GetName() then
+    -- Perform an initial trace from origin to destination
+    local initialTrace = engine.TraceLine(origin, dest, 100679691, function(entity) return entity:GetIndex() ~= target:GetIndex() end)
+
+    -- If the initial trace hits something other than the target, find a better shooting position
+    if initialTrace.fraction < 1 and initialTrace.entity:GetIndex() ~= target:GetIndex() then
         local direction = NormalizeVector(dest - origin)
 
-        -- Check initial clearance for left and right using checkPath2
-        local leftClear, leftMaxPoint = checkPath2(dest, direction, -90, BlastRadious, origin, target)
-        local rightClear, rightMaxPoint = checkPath2(dest, direction, 90, BlastRadious, origin, target)
+        -- Check initial clearance for left and right using checkPathClearance
+        local leftClear, leftMaxPoint = checkPathClearance(dest, direction, -90, BlastRadius, origin, target)
+        local rightClear, rightMaxPoint = checkPathClearance(dest, direction, 90, BlastRadius, origin, target)
 
         -- Determine the side to perform binary search on and its maximum distance point
         local searchSide = nil
         local maxDistancePoint = nil
 
-        if leftClear or rightClear then
-            if leftClear and rightClear then
-                -- Determine which side is closer to dest
-                local leftDistance = (leftMaxPoint - dest):Length()
-                local rightDistance = (rightMaxPoint - dest):Length()
+        if leftClear and rightClear then
+            -- Determine which side is closer to the destination
+            local leftDistance = (leftMaxPoint - dest):Length()
+            local rightDistance = (rightMaxPoint - dest):Length()
 
-                if leftDistance < rightDistance then
-                    searchSide = -90
-                    maxDistancePoint = leftMaxPoint
-                else
-                    searchSide = 90
-                    maxDistancePoint = rightMaxPoint
-                end
-            elseif leftClear then
+            if leftDistance < rightDistance then
                 searchSide = -90
                 maxDistancePoint = leftMaxPoint
             else
                 searchSide = 90
                 maxDistancePoint = rightMaxPoint
             end
+        elseif leftClear then
+            searchSide = -90
+            maxDistancePoint = leftMaxPoint
+        elseif rightClear then
+            searchSide = 90
+            maxDistancePoint = rightMaxPoint
         end
 
-        -- Perform binary search to find the closest shootable point to dest
+        -- Perform binary search to find the closest shootable point to the destination
         if searchSide and maxDistancePoint then
             local minDistance = 0
             local maxDistance = (maxDistancePoint - dest):Length()
-            local iterations = Menu.Advanced.SplashAccuracy
+            local iterations = Menu.Advanced.SplashAccuracy or 5
             local bestPoint = maxDistancePoint  -- Start with the farthest point
             local bestDistance = maxDistance
 
@@ -681,10 +706,16 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadious, shou
         end
 
         return false  -- No valid shooting position found
-        end
+    end
 
-    return dest
+    return dest  -- If the initial trace is clear, return the destination as the best shooting position
 end
+
+-- Precompute and cache frequently used constants and empty vectors
+local EMPTY_VECTOR = Vector3(0, 0, 0)
+local MASK_PLAYERSOLID = 100679691  -- Example value; replace with the actual value from your environment
+local MIN_HIT_FRACTION = 1.0
+local DRAG_CONSTANT = 0.029374  -- Combined drag coefficients
 
 -- Calculates the angle needed to hit a target with a projectile
 ---@param origin Vector3
@@ -694,92 +725,101 @@ end
 ---@param sv_gravity number
 ---@return { angles: EulerAngles, time : number }?
 local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
+    -- Cache vectors and precomputed values
     local v = dest - origin
-    local v0 = speed
-    local v0_squared = v0 * v0
+    local v0_squared = speed * speed
     local g = sv_gravity * gravity
-    local shootpos = dest
-    local shouldhitentiy = function(entity) return entity:GetIndex() ~= target:GetIndex() or entity:GetTeamNumber() ~= target:GetTeamNumber() end
+    local dx = v:Length2D()
+    local dy = v.z
 
-    local initialTrace = engine.TraceHull(origin, dest, largeHitbox[1], largeHitbox[2], MASK_PLAYERSOLID)
-    local shouldUseDetailedHullTrace = initialTrace.fraction < 1 and initialTrace.entity ~= target
+    -- Cache the entity filter function
+    local shouldHitEntity = function(entity)
+        return entity:GetIndex() ~= target:GetIndex() or entity:GetTeamNumber() ~= target:GetTeamNumber()
+    end
 
-    if g == 0 then -- No gravity case
-        local time = v:Length() / v0
+    -- No gravity case
+    if g == 0 then
+        local time = v:Length() / speed
         if time > timeToHit then
-            return false  -- Projectile will flly out of range
+            return false  -- Projectile will fly out of range
         end
 
-        -- if path is clear
-        local trace = engine.TraceHull(origin, shootpos, DefaultHitbox[1], DefaultHitbox[2], MASK_PLAYERSOLID)
-        if trace.fraction ~= 1 and trace.entity:GetName() ~= target:GetName() then
+        -- Path trace check
+        local trace = engine.TraceLine(origin, dest, MASK_PLAYERSOLID)
+        if trace.fraction ~= MIN_HIT_FRACTION and trace.entity:GetName() ~= target:GetName() then
             return false
         end
 
-        projectileSimulation = {origin}
-        table.insert(projectileSimulation, dest)
-        return { angles = Math.PositionAngles(origin, shootpos), time = time, Prediction = shootpos }
-    else -- Ballistic arc calculation
+        return {
+            angles = Math.PositionAngles(origin, dest),
+            time = time,
+            Prediction = dest,
+            Positions = {origin, dest}
+        }
+    else
+        -- Ballistic arc calculation
+        local gdx_squared = g * dx * dx
 
-        local dx = v:Length2D()
-        local dy = v.z
-        local root = v0_squared * v0_squared - g * (g * dx * dx + 2 * dy * v0_squared)
+        -- Solve the quadratic equation for projectile motion
+        local root = v0_squared * v0_squared - g * (gdx_squared + 2 * dy * v0_squared)
         if root < 0 then return nil end
 
-        local pitch = math.atan((v0_squared - math.sqrt(root)) / (g * dx))
+        -- Calculate pitch and yaw angles
+        local sqrtRoot = math.sqrt(root)
+        local pitch = math.atan((v0_squared - sqrtRoot) / (g * dx))
         local yaw = math.atan(v.y, v.x)
 
         if isNaN(pitch) or isNaN(yaw) then return nil end
 
+        -- Precompute angles and constants
         local angles = EulerAngles(pitch * -M_RADPI, yaw * M_RADPI)
-        local timeToTarget = dx / (math.cos(pitch) * v0)
-
-        -- Adjusted simulation with segments and drag
-        local numSegments = Menu.Advanced.ProjectileSegments or 2
+        local cosPitch = math.cos(pitch)
+        local timeToTarget = dx / (cosPitch * speed)
+        local numSegments = math.max(1, Menu.Advanced.ProjectileSegments or 2)
         local segmentLength = timeToTarget / numSegments
         local pos = origin
-        local trace
-        local currentVelocity = v0
+        local currentVelocity = speed
 
-        -- Drag data
-        local drag = 1
-        local drag_basis = { 0.003902, 0.009962, 0.009962 }
-        local ang_drag_basis = { 0.003618, 0.001514, 0.001514 }
+        -- Table to store positions along the projectile's path
+        local projectileSimulation = {pos}
 
-        -- Calculate drag coefficient
-        local dragCoefficient = drag * (drag_basis[1] + drag_basis[2] + drag_basis[3] + ang_drag_basis[1] + ang_drag_basis[2] + ang_drag_basis[3])
-
-        -- Table to store positions
-        projectileSimulation = {pos}
-
+        -- Simulate the projectile's flight path
         for segment = 1, numSegments do
             local t = segment * segmentLength
 
-            -- Apply drag to the velocity
-            currentVelocity = currentVelocity * (1 - dragCoefficient * t)
+            -- Apply drag to the current velocity
+            currentVelocity = currentVelocity * math.exp(-DRAG_CONSTANT * t)
 
-            local x = currentVelocity * math.cos(pitch) * t
+            -- Calculate the new position based on current velocity, angle, and gravity
+            local x = currentVelocity * cosPitch * t
             local y = currentVelocity * math.sin(pitch) * t - 0.5 * g * t * t
             local newPos = origin + Vector3(x * math.cos(yaw), x * math.sin(yaw), y)
 
-            if segment <= 10 or not shouldUseDetailedHullTrace then
-                trace = engine.TraceLine(pos, newPos, MASK_SHOT_HULL, shouldhitentiy)
-            else
-                trace = engine.TraceHull(pos, newPos, DefaultHitbox[1], DefaultHitbox[2], MASK_SHOT_HULL, shouldhitentiy)
-            end
+            -- Perform a trace to check for collisions
+            local trace = engine.TraceLine(pos, newPos, MASK_PLAYERSOLID, shouldHitEntity)
 
-            -- Save position
+            -- Save the new position
             table.insert(projectileSimulation, newPos)
-            if trace.fraction < 1 and trace.entity ~= target then
-                return false  -- Collision detected
+
+            -- Check if the projectile collided with something that isn't the target
+            if trace.fraction < MIN_HIT_FRACTION and trace.entity ~= target then
+                return false  -- Collision detected, exit the loop
             end
 
+            -- Update the current position for the next segment
             pos = newPos
         end
 
-        return { angles = angles, time = timeToTarget, Prediction = pos, Positions = positions }
+        -- Return the calculated angles, time to target, final predicted position, and all positions along the path
+        return {
+            angles = angles,
+            time = timeToTarget,
+            Prediction = pos,
+            Positions = projectileSimulation
+        }
     end
 end
+
 
 --Returns whether the player is on the ground
 ---@return boolean
@@ -802,7 +842,6 @@ local function CheckProjectileTarget(me, weapon, player)
     local vStep = Vector3(0, 0, stepSize / 2)
     vPath = {}
     local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), IsOnGround(player)
-    local currpos
     local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber() end --trace ignore simulated player 
     local BlastRadious = 150
 
@@ -863,19 +902,33 @@ local function CheckProjectileTarget(me, weapon, player)
         -- Projectile Targeting Logic
         pos = lastP + aimOffset
         vPath[i] = pos --save path for visuals
-    
-        -- Hitchance check
-        if i == Menu.Advanced.Hitchance_Accuracy or i == PredTicks then
-            lastPosition[player:GetIndex()] = priorPrediction[player:GetIndex()]
-            priorPrediction[player:GetIndex()] = pos
 
-            hitChance = calculateHitChancePercentage(lastPosition[player:GetIndex()], priorPrediction[player:GetIndex()])
-            shouldPredict = hitChance >= Menu.Main.MinHitchance
+        -- Initialize storage for predictions if not already initialized
+        if not lastPosition[player:GetIndex()] then lastPosition[player:GetIndex()] = {} end
+        if not priorPrediction[player:GetIndex()] then priorPrediction[player:GetIndex()] = {} end
 
-            if not shouldPredict then
-                return nil
+        -- Hitchance check and synchronization of predictions
+        if i <= PredTicks then
+            local currentTick = PredTicks - i  -- Determine which tick in the future we're currently predicting
+
+            -- Store the last prediction of the current tick
+            lastPosition[player:GetIndex()][currentTick] = priorPrediction[player:GetIndex()][currentTick] or pos
+
+            -- Update priorPrediction with the current predicted position for this tick
+            priorPrediction[player:GetIndex()][currentTick] = pos
+
+            -- If this is the last simulation tick or we're comparing predictions
+            if i == 1 or currentTick == 1 then
+                -- Calculate the hit chance percentage based on the difference between the last and current prediction
+                hitChance = calculateHitChancePercentage(lastPosition[player:GetIndex()][currentTick], priorPrediction[player:GetIndex()][currentTick])
+
+                -- Check if the calculated hit chance meets the minimum required threshold
+                if hitChance < Menu.Main.MinHitchance then
+                    return nil  -- If not, return nil to indicate that the prediction is not reliable
+                end
             end
         end
+
 
         local solution = SolveProjectile(shootPos, pos, projInfo[1], projInfo[2], gravity, player, PredTicks * tick_interval)
         if solution == nil then goto continue end
@@ -1002,7 +1055,7 @@ local function GetBestTarget(me, weapon)
             -- TODO: Improve this
             if projType == 1 then
                 -- Hitscan weapon
-                return CheckHitscanTarget(me, weapon, bestTarget)
+                --return CheckHitscanTarget(me, weapon, bestTarget)
             else
                 -- Projectile weapon
                 return CheckProjectileTarget(me, weapon, bestTarget)
@@ -1231,7 +1284,7 @@ local function OnDraw()
                     if screenPos1 ~= nil and screenPos2 ~= nil then
                         if Menu.Visuals.VisualizeHitchance then
                             local width = draw.GetTextSize(math.floor(hitChance))
-                            draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2], math.floor(hitChance))
+                            draw.Text(screenPos2[1] - math.floor(width / 2), screenPos2[2] + 20, math.floor(hitChance))
                         end
                         if Menu.Visuals.Crosshair then 
                             local c_size = 8
