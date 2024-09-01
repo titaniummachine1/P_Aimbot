@@ -14,7 +14,7 @@ Config:Initialize() -- Initialize the config with the script name
 
 --[[Classes]]--
 local BestTarget = require("PAimbot.Modules.Helpers.BestTarget")
-local Player = require("PAimbot.Modules.Prediction.player")
+local Prediction = require("PAimbot.Modules.Prediction.Prediction")
 require("PAimbot.Modules.Helpers.VariableUpdater")
 require("PAimbot.Visuals")
 
@@ -213,7 +213,10 @@ local function CalcualteShots()
     G.Target = BestTarget.Get(pLocal)
     if not G.Target then return end
 
-    G.PredictionData.PredPath = Player:Predict(G.Target, 33, 0)
+    Prediction:update(G.Target, 0)
+    Prediction:predict(13)
+
+    G.PredictionData.PredPath = Prediction:history()
 end
 
 local function CleanupPhysics()
