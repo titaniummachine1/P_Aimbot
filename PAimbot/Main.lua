@@ -14,7 +14,9 @@ Config:Initialize() -- Initialize the config with the script name
 
 --[[Classes]]--
 local BestTarget = require("PAimbot.Modules.Helpers.BestTarget")
+local HistoryHandler = require("PAimbot.Modules.Prediction.HistoryHandler")
 local Prediction = require("PAimbot.Modules.Prediction.Prediction")
+
 require("PAimbot.Modules.Helpers.VariableUpdater")
 require("PAimbot.Visuals")
 
@@ -210,11 +212,15 @@ local function CalcualteShots()
     local weapon = pLocal:GetPropEntity("m_hActiveWeapon")
         if not IsValidWeapon(weapon) then return end
 
-    G.Target = BestTarget.Get(pLocal)
-    if not G.Target then return end
+    --strafe angle history and accel and viewwangle stuff
+    HistoryHandler:updateAllValidTargets()
 
-    Prediction:update(G.Target, 0)
-    Prediction:predict(13)
+    --finds best target
+    G.Target = BestTarget.Get(pLocal)
+    --if not G.Target then return end
+
+    Prediction:update(pLocal)
+    Prediction:predict(66)
 
     G.PredictionData.PredPath = Prediction:history()
 end

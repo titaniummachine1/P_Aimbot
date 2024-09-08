@@ -6,6 +6,9 @@ G.Hitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
 G.TickInterval = globals.TickInterval()
 G.TickCount = globals.TickCount()
 
+G.history = {}
+G.predictionDelta = {}
+
 G.PredictionData = {
     PredPath = {};
 }
@@ -43,6 +46,7 @@ G.Default_Menu = {
         SplashBot = true,
         SplashAccuracy = 5,
         PredTicks = 132,
+        HistoryTicks = 10,
         Hitchance_Accuracy = 10,
 
         StrafePrediction = true,

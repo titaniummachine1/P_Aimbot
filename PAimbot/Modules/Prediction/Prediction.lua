@@ -7,8 +7,8 @@ local G = require("PAimbot.Globals")
 
 local vUp = Vector3(0, 0, 1)
 local emptyVector = Vector3(0, 0, 0)
-local ignoreEntities = {"CTFAmmoPack", "CTFDroppedWeapon"}
-local fFalse = function() return false end
+local ignoreEntities = { "CTFAmmoPack", "CTFDroppedWeapon" }
+local MAX_SPEED = 450 -- Maximum speed the player can have on the ground
 
 local function shouldHitEntityFun(entity, player)
     -- Ignore certain entities based on their class
@@ -23,10 +23,10 @@ local function shouldHitEntityFun(entity, player)
     local contents = engine.GetPointContents(pos)
 
     -- If the point contents are not empty (not air), consider hitting the entity
-    if contents == CONTENTS_EMPTY then return false end
+    if contents ~= CONTENTS_EMPTY then return false end
 
     -- Ignore self (the player being simulated)
-    if entity:GetIndex() == player:GetIndex() then return false end
+    if entity == player then return false end
 
     -- Ignore teammates
     if entity:GetTeamNumber() == player:GetTeamNumber() then return false end
@@ -34,7 +34,6 @@ local function shouldHitEntityFun(entity, player)
     -- Otherwise, consider the entity as hittable
     return true
 end
-
 
 -- Returns whether the player is on the ground
 ---@return boolean
@@ -57,8 +56,10 @@ function Prediction:reset()
     self.velocity = nil
     self.onGround = nil
     self.deltaStrafe = nil
+    self.accelDelta = nil
     self.vStep = nil
     self.hitbox = nil
+    self.MAX_SPEED = nil
     self.shouldHitEntity = nil
 end
 
@@ -76,12 +77,12 @@ end
 
 -- Initialize the Prediction instance
 function Prediction:init()
-    self:reset()  -- Automatically reset on initialization
+    self:reset() -- Automatically reset on initialization
 end
 
 -- Update: Updates prediction with player data, caching gravity, step height, hitbox, and vStep
-function Prediction:update(player, deltaStrafe)
-    self:reset()  -- Reset to clear the cache before updating with new data
+function Prediction:update(player)
+    self:reset() -- Reset to clear the cache before updating with new data
 
     -- Cache gravity using the ConVar, with a fallback default value of 800
     self.gravity = client.GetConVar("sv_gravity") or 800
@@ -90,6 +91,7 @@ function Prediction:update(player, deltaStrafe)
     self.stepHeight = player:GetPropFloat("localdata", "m_flStepSize") or 18
 
     -- Cache hitbox dimensions from G.Hitbox, if available
+    G.Hitbox.Max.z = IsOnGround(player) and 62 or 82 -- account for ducking
     self.hitbox = G.Hitbox or { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
 
     -- Cache vStep based on the cached step height
@@ -99,12 +101,28 @@ function Prediction:update(player, deltaStrafe)
     self.position = player:GetAbsOrigin()
     self.velocity = player:EstimateAbsVelocity()
     self.onGround = IsOnGround(player)
-
-    -- Cache the delta for strafe (this could be used in prediction logic)
-    self.deltaStrafe = deltaStrafe
-
-    -- Cache the shouldHitEntity function for TraceHull
+    self.MAX_SPEED = player:GetPropFloat("m_flMaxspeed") or MAX_SPEED -- Default to 450 if max speed not available
     self.shouldHitEntity = function(entity) return shouldHitEntityFun(entity, player) end
+
+    -- Retrieve the delta values from the global prediction delta table
+    local playerIndex = player:GetIndex()
+    local predictionDelta = G.history[playerIndex] or { strafeDelta = 0, accelDelta = 0 }
+    self.deltaStrafe = predictionDelta.strafeDelta
+    self.accelDelta = predictionDelta.accelDelta
+
+    -- If on the ground and acceleration delta would exceed max speed, clamp it
+    if self.onGround then
+        local currentSpeed = self.velocity:Length()
+        if currentSpeed < self.MAX_SPEED then
+            local potentialSpeed = currentSpeed + self.accelDelta
+            if potentialSpeed > self.MAX_SPEED then
+                self.accelDelta = self.MAX_SPEED - currentSpeed
+            end
+        else
+            -- Do not apply acceleration if already at or above max speed
+            self.accelDelta = 0
+        end
+    end
 end
 
 function Prediction:predictTick()
@@ -113,19 +131,52 @@ function Prediction:predictTick()
         self.velocity.z = self.velocity.z + (-self.gravity * G.TickInterval)
     end
 
+    -- Apply acceleration or deceleration delta based on the accelDelta value
+    if self.onGround then
+        local speed = self.velocity:Length()
+
+        if self.accelDelta > 0 then
+            -- Player is accelerating
+            local forward = Common.Normalize(self.velocity)
+            local accelAmount = self.accelDelta * (G.TickInterval ^ 2) ^ 2 -- Apply squared tick interval for acceleration
+            local newVelocity = self.velocity + (forward * accelAmount)
+            local newSpeed = newVelocity:Length()
+
+            -- If the new speed exceeds max speed, clamp it to max speed
+            if newSpeed > self.MAX_SPEED then
+                newVelocity = newVelocity * (self.MAX_SPEED / newSpeed)
+            end
+            self.velocity = newVelocity
+        elseif self.accelDelta < 0 then
+            -- Player is decelerating
+            local deceleration = -self.accelDelta * (G.TickInterval ^ 4) ^ 2 -- Use squared squared tick interval for deceleration
+            local newSpeed = math.max(0, speed - deceleration)
+
+            -- Gradually reduce the speed to zero (full stop)
+            if newSpeed > 0 then
+                -- Scale the velocity proportionally to the new speed
+                self.velocity = self.velocity * (newSpeed / speed)
+            else
+                -- If fully decelerated, stop the player
+                self.velocity = Vector3(0, 0, 0)
+            end
+        end
+    end
+
+    -- Apply strafe angle only if player is accelerating, at max speed, or airborne
+    local velocitySpeed = self.velocity:Length()
+    if self.deltaStrafe and (not self.onGround or self.accelDelta > 0 or math.abs(velocitySpeed - self.MAX_SPEED) < 0.01) then
+        local ang = self.velocity:Angles()
+        ang.y = ang.y + self.deltaStrafe
+        self.velocity = ang:Forward() * self.velocity:Length()
+    end
+
     -- Start position and velocity for the current tick
     local pos = self.position + self.velocity * G.TickInterval
     local vel = self.velocity
     local onGround = self.onGround
 
-    -- Apply deviation if provided
-    if self.deltaStrafe then
-        local ang = vel:Angles()
-        ang.y = ang.y + self.deltaStrafe
-        vel = ang:Forward() * vel:Length()
-    end
-
-    -- Forward collision
+    -- Forward collision handling
     local wallTrace = Common.TRACE_HULL(self.position + self.vStep, pos + self.vStep, self.hitbox.Min, self.hitbox.Max, MASK_SHOT_HULL, self.shouldHitEntity)
     if wallTrace.fraction < 1 then
         local normal = wallTrace.plane
@@ -139,7 +190,7 @@ function Prediction:predictTick()
         pos.x, pos.y = wallTrace.endpos.x, wallTrace.endpos.y
     end
 
-    -- Ground collision
+    -- Ground collision handling
     local downStep = self.vStep
     if not onGround then downStep = emptyVector end
 
@@ -171,7 +222,7 @@ function Prediction:predictTick()
         vel.z = vel.z - self.gravity * G.TickInterval
     end
 
-    -- Store the prediction result for this tick in an efficient manner
+    -- Store the prediction result for this tick
     self.cachedPredictions.pos[self.currentTick + 1] = pos
     self.cachedPredictions.vel[self.currentTick + 1] = vel
     self.cachedPredictions.onGround[self.currentTick + 1] = onGround
@@ -189,18 +240,14 @@ function Prediction:predictTick()
     }
 end
 
+
 -- Predict: Predict a given number of ticks ahead from the current tick
 function Prediction:predict(ticks)
-    ticks = ticks or 1  -- Default to predicting one tick if no value is provided
+    ticks = ticks or 1 -- Default to predicting one tick if no value is provided
 
     -- Predict the necessary ticks, using the cache if possible
     for i = 1, ticks do
-        if not self.cachedPredictions.pos[self.currentTick + 1] then
-            self:predictTick()  -- This will store the results in the cache
-        else
-            -- Use cached prediction if available
-            self.currentTick = self.currentTick + 1
-        end
+        self:predictTick() -- This will store the results in the cache
     end
 
     -- Return the result table for the final tick
@@ -213,11 +260,11 @@ end
 
 -- Rewind: Rewinds the prediction to a previous tick
 function Prediction:rewind(ticks)
-    ticks = ticks or 1  -- Default to rewinding one tick if no value is provided
+    ticks = ticks or 1 -- Default to rewinding one tick if no value is provided
     local targetTick = self.currentTick - ticks
 
     if targetTick < 1 then
-        targetTick = 1  -- Ensure we don't rewind before the first tick
+        targetTick = 1 -- Ensure we don't rewind before the first tick
     end
 
     self.currentTick = targetTick

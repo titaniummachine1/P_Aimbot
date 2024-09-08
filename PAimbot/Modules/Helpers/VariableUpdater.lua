@@ -14,13 +14,6 @@ local function UpdateVariables()
     G.TickInterval = globals.TickInterval()
 
     if not G.Target then return end
-    local VpFlags = G.Target:GetPropInt("m_fFlags")
-    local DUCKING = (VpFlags & FL_DUCKING == 2)
-    if DUCKING then
-        G.Hitbox.Min.z = 62
-    else
-        G.Hitbox.Max.z = 82
-    end
 end
 
 local function UpdateVariablesSlow()
