@@ -468,13 +468,8 @@ local TraceHull = engine.TraceHull
 local function isNaN(x) return x ~= x end
 
 -- Normalize vector function
-local function NormalizeVector(vector)
-    local length = math.sqrt(vector.x * vector.x + vector.y * vector.y)
-    if length == 0 then
-        return Vector3(0, 0, vector.z)
-    else
-        return Vector3(vector.x / length, vector.y / length, vector.z / length)
-    end
+local function Normalize(Vector)
+    return Vector / Vector:Length()
 end
 
 -- Rotate vector function
@@ -490,14 +485,13 @@ local function RotateVector(vector, angle)
 end
 
 -- Define the necessary variables
-local groundTrace = {}  -- Replace with the actual ground trace
 local vUp = Vector3(0, 0, 1)  -- Replace with the actual up vector
 local GROUND_COLLISION_ANGLE_LOW = 45  -- Replace with the actual value
 local GROUND_COLLISION_ANGLE_HIGH = 60  -- Replace with the actual value
 local FORWARD_COLLISION_ANGLE = 55 
 
 local projectileSimulation = {}
-local projectileSimulation2 = Vector3(0, 0, 0)
+local projectileSimulation2 = EMPTY_VECTOR
 
 -- Helper function for forward collision
 local function handleForwardCollision(vel, wallTrace)
@@ -527,9 +521,6 @@ local function handleGroundCollision(vel, groundTrace)
     if onGround then vel.z = 0 end
     return groundTrace.endpos, onGround
 end
-
-
-
 
 -- Assuming GetLocalPlayer() returns the local player entity object
 --[[ Assuming Vector3 is a 3D vector class
@@ -615,7 +606,7 @@ local function checkPathClearance(dest, direction, angle, distance, origin, targ
     local distanceToTarget = (traceDown.endpos - dest):Length()
     if distanceToTarget > distance then
         local excessDistance = distanceToTarget - distance
-        local directionToDest = NormalizeVector(traceDown.endpos - dest)
+        local directionToDest = Normalize(traceDown.endpos - dest)
         traceDown.endpos = traceDown.endpos + directionToDest * excessDistance
     end
 
@@ -646,7 +637,7 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadius)
 
     -- If the initial trace hits something other than the target, find a better shooting position
     if initialTrace.fraction < 1 and initialTrace.entity:GetIndex() ~= target:GetIndex() then
-        local direction = NormalizeVector(dest - origin)
+        local direction = Normalize(dest - origin)
 
         -- Check initial clearance for left and right using checkPathClearance
         local leftClear, leftMaxPoint = checkPathClearance(dest, direction, -90, BlastRadius, origin, target)
@@ -713,7 +704,6 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadius)
 end
 
 -- Precompute and cache frequently used constants and empty vectors
-local EMPTY_VECTOR = Vector3(0, 0, 0)  -- Represents an empty vector for zero velocity cases
 local MASK_PLAYERSOLID = 100679691  -- Example value; replace with the actual value from your environment for tracing
 local FULL_HIT_FRACTION = 1.0  -- Represents a full hit fraction in trace results
 local DRAG_COEFFICIENT = 0.029374  -- Combined drag coefficients for drag simulation
@@ -757,8 +747,10 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
         -- Perform a trace line to check if the path is clear
         local trace = engine.TraceLine(origin, dest, MASK_PLAYERSOLID)
         if trace.fraction ~= FULL_HIT_FRACTION and trace.entity:GetName() ~= target:GetName() then
-            return false  -- Path is obstructed, so return false
+            return false -- Path is obstructed, so return false
         end
+
+        projectileSimulation = {origin, trace.endpos}
 
         -- Return the result with no gravity calculations
         return {
@@ -801,7 +793,7 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
         local current_velocity = speed
 
         -- Table to store positions along the projectile's path
-        local projectile_path = {current_position}
+        projectileSimulation = {current_position}
 
         -- Simulate the projectile's flight path
         for segment = 1, number_of_segments do
@@ -819,7 +811,7 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
             local trace = engine.TraceLine(current_position, new_position, MASK_PLAYERSOLID, shouldHitEntity)
 
             -- Save the new position to the projectile path
-            table.insert(projectile_path, new_position)
+            table.insert(projectileSimulation, new_position)
 
             -- Check if the projectile collided with something that isn't the target
             if trace.fraction < FULL_HIT_FRACTION and trace.entity ~= target then
@@ -835,7 +827,7 @@ local function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target,
             angles = calculated_angles,
             time = time_to_target,
             Prediction = current_position,
-            Positions = projectile_path
+            Positions = projectileSimulation
         }
     end
 end
@@ -889,7 +881,7 @@ local function CheckProjectileTarget(me, weapon, player)
     local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
     local strafeAngle = Menu.Advanced.StrafePrediction and strafeAngles[player:GetIndex()] or nil
     local vStep = Vector3(0, 0, stepSize / 2)
-    local vPath = {}
+    vPath = {}
     local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), IsOnGround(player)
     local shouldHitEntity = shouldHitEntity or function(entity) return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber() end -- trace ignore simulated player
     local BlastRadius = 150
@@ -1140,6 +1132,8 @@ local function GetBestTarget(me, weapon)
     end
 end
 
+local EMPTY_VECTOR = Vector3(0, 0, 0)  -- Represents an empty vector for zero velocity cases
+
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
     if Menu.Main.AimKey == 107 and Menu.Main.AutoShoot then
@@ -1150,7 +1144,7 @@ local function OnCreateMove(userCmd)
         return
     end
 
-    projectileSimulation2 = nil
+    projectileSimulation2 = EMPTY_VECTOR
     local me = WPlayer.GetLocal()
     local pLocal = entities.GetLocalPlayer()
     if not me or not me:IsAlive() then return end
@@ -1316,7 +1310,6 @@ local function OnDraw()
         end
     end]]
 
-    
     if not input.IsButtonDown( Menu.Main.AimKey ) then
         if (globals.RealTime() > (clear_lines + 5)) then
             vPath = {}
@@ -1340,7 +1333,7 @@ local function OnDraw()
             draw.Color(255 - math.floor((hitChance / 100) * 255), math.floor((hitChance / 100) * 255), 0, 255)
  
                --draw predicted local position with strafe prediction
-               if projectileSimulation2 then
+               if projectileSimulation2 and projectileSimulation2 ~= EMPTY_VECTOR then
                 local screenPos = client.WorldToScreen(projectileSimulation2)
                     if screenPos ~= nil then
                         draw.Line( screenPos[1] + 10, screenPos[2], screenPos[1] - 10, screenPos[2])
@@ -1487,7 +1480,6 @@ local function OnDraw()
         draw.Color(255, greenValue, blueValue, 255)
         draw.Text(20, 280, string.format("%.2f", hitChance) .. "% Hitchance")
     end
-    
 
     --if Menu.Visuals.VisualizeProjectile then
     --draw predicted local position with strafe prediction
