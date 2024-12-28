@@ -221,7 +221,7 @@ local function CalcualteShots()
     --if not G.Target then return end
 
     Prediction:update(pLocal)
-    Prediction:predict(66)
+    Prediction:predict(132)
 
     G.PredictionData.PredPath = Prediction:history()
 end

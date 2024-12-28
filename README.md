@@ -1,29 +1,40 @@
-![Visitors](https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2Ftitaniummachine1%2FCheater_Detection&label=Visitors&countColor=%23263759&style=plastic)
+![](https://api.visitorbadge.io/api/VisitorHit?user=titaniummachine1&repo=P_Aimbot&countColor=%237B1E7A)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub issues](https://img.shields.io/github/issues/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/issues)
+[![GitHub forks](https://img.shields.io/github/forks/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/network)
+[![GitHub stars](https://img.shields.io/github/stars/titaniummachine1/P_Aimbot.svg)](https://github.com/titaniummachine1/P_Aimbot/stargazers)
+# P_Aimbot
+## This script REQUIRES [lnxLib](https://github.com/lnx00/Lmaobox-Library/releases/latest/) and [ImMenu](https://github.com/lnx00/Lmaobox-ImMenu/blob/main/src/ImMenu.lua). It will NOT work without these two luas.
+### Projectile aimbot lua for lmaobox.
 
 
-# Cheater_Detection
-![image](https://github.com/titaniummachine1/Cheater_Detection/assets/78664175/0b551b8b-1585-42b8-bbed-17104350e8d9)
+[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/P_Aimbot/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/P_Aimbot/releases/latest/download/Aimbot.lua)
 
-## Description
-Automatic bot and cheater detection and adds priority on cheaters.
-with visuals based on Rijin
+### Features
+- Main tab
+  - Silent aim toggle
+  - Auto shoot toggle
+  - Aim fov slider
+  - Minimum hitchanche slider
 
+- Advanced tab
+   - Strafe prediction toggle
+   - Maximum prediction ticks slider
+   - Prediction accuracy slider
+   - Strafe samples slider
+ 
+- Visuals tab
+  - Enable toggle
+      - Visualize path toggle
+         - Path style selection (Line | Alt Line | Dashed )
+      - Visualize hitchanche
+      - Crosshair
+      - Visualize hit pos
+      - Nullcore pred visuals
 
-[In case of problems Contact me on Telegram](https://t.me/TerminatorMachine)
-https://t.me/TerminatorMachine
+- Config tab
+   - Create/Save config
+   - Load config
 
-## Requirements
-Click on the buttons below to download the requirements. V
-
-[![LuaLib](https://img.shields.io/badge/Download-Latest-blue?style=for-the-badge&logo=download)](https://github.com/lnx00/Lmaobox-Library/releases/latest/) and copy the `lnxLib.lua` file to your `%localappdata%` folder.
-
-[![ImMenu](https://img.shields.io/badge/Download-Menu.lua_lnx00-blue?style=for-the-badge&logo=github)](https://github.com/lnx00/Lmaobox-ImMenu/blob/main/src/ImMenu.lua) and copy the `imMenu.lua` file to your `%localappdata%` folder.
-
-
-## Download
-[![Download Latest](https://img.shields.io/github/downloads/titaniummachine1/Cheater_Priority/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/Cheater_Detection/releases/latest/download/Cheater_Detection.lua)
-
-![image](https://github.com/titaniummachine1/Cheater_Detection/assets/78664175/bc8ea7b4-1313-46c2-a3a3-87b71ce0116b)
-
-
+![image](https://github.com/titaniummachine1/P_Aimbot/assets/78664175/0f7da659-1928-4bb5-919f-d928efc36db7)
+![image](https://github.com/titaniummachine1/P_Aimbot/assets/78664175/6b436cca-6359-477b-b38f-bbc4cc1409f4)

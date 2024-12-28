@@ -8,11 +8,11 @@ local G = require("PAimbot.Globals")
 -- Configuration
 --------------------------------------------------------------------------------
 HistoryHandler.kalmanConfig = {
-    processNoise       = 0.1,  -- Q for strafeDelta
+    processNoise       = 0.7,  -- Q for strafeDelta
     processNoiseAcc    = 0.1,  -- Q for acceleration
     baseMeasurementNoise   = 0.05, -- R baseline for strafeDelta
     baseMeasurementNoiseAcc= 0.05, -- R baseline for acceleration
-    minimumHistoryCount    = 3,    -- Only compute std if at least 3 samples
+    minimumHistoryCount    = 4,    -- Only compute std if at least x samples
 }
 
 --------------------------------------------------------------------------------
