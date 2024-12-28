@@ -46,11 +46,11 @@ G.Default_Menu = {
         SplashBot = true,
         SplashAccuracy = 5,
         PredTicks = 132,
-        HistoryTicks = 10,
+        HistoryTicks = 20,
         Hitchance_Accuracy = 10,
 
         StrafePrediction = true,
-        StrafeSamples = 4,
+        StrafeSamples = 17,
 
 		-- 0.5 to 8, determines the size of the segments traced, lower values = worse performance (default 2.5)
 		ProjectileSegments = 2.5,
