@@ -493,7 +493,7 @@ local function FindBestShootingPosition(origin, dest, target, BlastRadius)
 end
 
 -- Precompute and cache frequently used constants and empty vectors
-local MASK_PLAYERSOLID = MASK_SHOT_HULL -- Example value; replace with the actual value from your environment for tracing
+local MASK_PLAYERSOLID = 100679691 -- Example value; replace with the actual value from your environment for tracing
 local FULL_HIT_FRACTION = 1.0           -- Represents a full hit fraction in trace results
 local DRAG_COEFFICIENT = 0.029374       -- Combined drag coefficients for drag simulation
 
@@ -694,7 +694,6 @@ end
 local function GetAimPos(weapon, player)
    --local aimPos = weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET and GetFeetPosition(player) or weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ARROW and GetHeadPosition(player) or GetBodyPosition(player)
    local class = player:GetPropInt("m_PlayerClass", "m_iClass")
-   print(class)
    if weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
    or weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB then
       return GetFeetPosition(player)
