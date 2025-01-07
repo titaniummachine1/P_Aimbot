@@ -48,11 +48,6 @@ local Menu = { -- this is the config that will be loaded every time u load the s
       AutoShoot = gui.GetValue("auto shoot") == 1 and true or false,
       Silent = true,
       pSilent = gui.GetValue("aim method (projectile)") == "silent +",
-      AimPos = {
-         CurrentAimPos = Hitbox.Head,
-         Hitscan = Hitbox.Head,
-         Projectile = Hitbox.Feet
-      }, --- AimPos does nothing wtf, why is it here then???
       MinDistance = 100,
       MaxDistance = 1500,
       MinHitchance = 40,
