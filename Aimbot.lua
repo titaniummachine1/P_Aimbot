@@ -1021,7 +1021,7 @@ local function OnCreateMove(userCmd)
       end
    end
 
-   if (userCmd.buttons & IN_ATTACK == 1) then
+   if (userCmd.buttons & IN_ATTACK ~= 0) then
       -- Aim at the target
       userCmd:SetViewAngles(currentTarget.angles:Unpack())
       if Menu.Main.pSilent then
