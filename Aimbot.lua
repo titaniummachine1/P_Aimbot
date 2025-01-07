@@ -688,11 +688,11 @@ end
 
 local function GetAimPos(weapon, player)
    --local aimPos = weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET and GetFeetPosition(player) or weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ARROW and GetHeadPosition(player) or GetBodyPosition(player)
-   local class = player:GetPropInt("m_PlayerClass", "m_iClass")
    if weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
    or weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB then
       return GetFeetPosition(player)
    elseif weapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ARROW then
+      local class = player:GetPropInt("m_PlayerClass", "m_iClass")
       --- player is a medic or sniper?
       if class == 2 then --- medic
          return GetBodyPosition(player)
