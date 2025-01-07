@@ -675,7 +675,7 @@ end
 
 ---@param player Entity
 local function GetBodyPosition (player)
-    return GetBonePosition(player, Hitbox.Body)
+    return GetBonePosition(player, Hitbox.Pelvis)
 end
 
 local function GetHeadPosition(player)
