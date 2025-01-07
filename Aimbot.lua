@@ -1024,9 +1024,9 @@ local function OnCreateMove(userCmd)
    if (userCmd.buttons & IN_ATTACK ~= 0) then
       -- Aim at the target
       userCmd:SetViewAngles(currentTarget.angles:Unpack())
-      if Menu.Main.pSilent then
-         userCmd.sendpacket = false
-      elseif not Menu.Main.pSilent and not Menu.Main.Silent then
+      userCmd.sendpacket = not Menu.Main.pSilent
+
+      if not Menu.Main.pSilent and not Menu.Main.Silent then
          engine.SetViewAngles(currentTarget.angles)
       end
    end
