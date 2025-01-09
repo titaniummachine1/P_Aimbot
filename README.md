@@ -58,7 +58,7 @@
 ---
 
 ### 3. **Hitchance Check Optimization**
-   - **Issue:** The hitchance check is currently dependent on pre-made predictions, which may lead to less accurate results during continuous tracking of moving targets.
+   - **Issue:** The hitchance check is currently dependent on real time predictions, which may lead to not shooting short attacks.
    - **Potential Improvement:** Optimize the hitchance calculation to run as part of a continuous prediction system rather than relying solely on already-made predictions. This will improve consistency for dynamic and fast-moving targets.
 
 ---
