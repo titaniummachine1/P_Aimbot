@@ -55,13 +55,13 @@ local Menu = { -- this is the config that will be loaded every time u load the s
 
    Advanced = {
       SplashPrediction = true,
-      SplashAccuracy = 4,
+      SplashAccuracy = 6,
       PredTicks = 77,
-      Hitchance_Accuracy = 10,
+      Hitchance_Accuracy = 17,
       AccuracyWeight = 5,
       StrafePrediction = true,
-      StrafeSamples = 4,
-      ProjectileSegments = 10,
+      StrafeSamples = 17,
+      ProjectileSegments = 7,
       Aim_Modes = {
          Leading = true,
          trailing = false,
@@ -72,7 +72,7 @@ local Menu = { -- this is the config that will be loaded every time u load the s
       Active = true,
       VisualizePath = true,
       Path_styles = { "Line", "Alt Line", "Dashed" },
-      Path_styles_selected = 1,
+      Path_styles_selected = 2,
       VisualizeHitchance = false,
       VisualizeProjectile = false,
       VisualizeHitPos = false,
@@ -631,18 +631,18 @@ end
 local function calculateTrustFactor(numRecords, maxRecords, growthRate)
    -- Ensure we avoid division by zero
    if maxRecords == 0 then
-      return 0
+       return 0
    end
 
    -- Calculate the ratio of current records to maximum records
    local ratio = numRecords / maxRecords
 
-   -- Apply an exponential function to grow the trust factor
-   local trustFactor = 1 - math.exp(-growthRate * ratio)
+   -- Apply a logarithmic function to grow the trust factor
+   local trustFactor = math.log(1 + ratio * (math.exp(growthRate) - 1)) / growthRate
 
    -- Ensure the trust factor is capped at 1
    if trustFactor > 1 then
-      trustFactor = 1
+       trustFactor = 1
    end
 
    -- Round the trust factor to 2 decimal places
@@ -855,7 +855,7 @@ local function CheckProjectileTarget(me, weapon, player)
 
    -- Calculate trust factor based on the number of records
    local numRecords = #hitChanceRecords[player:GetIndex()]
-   local growthRate = Menu.Advanced.AccuracyWeight or 5 -- Customize as needed
+   local growthRate = Menu.Advanced.AccuracyWeight or 1 -- Customize as needed
    local trustFactor = calculateTrustFactor(numRecords, Menu.Advanced.Hitchance_Accuracy, growthRate)
 
    -- Adjust the average hit chance based on trust factor
