@@ -14,7 +14,6 @@
 local G = require("PAimbot.Globals")
 local Common = require("PAimbot.Common")
 local Config = require("PAimbot.Config")
-Config:Initialize() -- Initialize the config with the script name
 
 --[[Classes]]--
 local BestTarget = require("PAimbot.Modules.Helpers.BestTarget")
@@ -47,11 +46,11 @@ local function CalcualteShots()
     --local ProjData = ProjectileData.GetProjectileData(pLocal, weapon)
     --if not ProjData then return end
 
-    --strafe angle history and accel and viewwangle stuff
-    HistoryHandler:updateAllValidTargets()
+    --strafe angle history
+    HistoryHandler:update()
 
     --finds best target
-    G.Target = BestTarget.Get(pLocal)
+    G.Target = BestTarget.Get()
     --if not G.Target then return end
 
     Prediction:update(pLocal)
@@ -60,14 +59,8 @@ local function CalcualteShots()
     G.PredictionData.PredPath = Prediction:history()
 end
 
-local function OnUnload()
-    Config:SaveConfig(G.Menu)
-end
-
 -- Register the drawing callback for rendering the trajectory
 callbacks.Unregister("CreateMove", G.scriptName .. "_ProjectileAimbot")
-callbacks.Unregister("Unload", G.scriptName .. "_CleanupObjects")
 
 -- Register the drawing callback for rendering the trajectory
 callbacks.Register("CreateMove", G.scriptName .. "_ProjectileAimbot", CalcualteShots)
-callbacks.Register("Unload", G.scriptName .. "_CleanupObjects", OnUnload)

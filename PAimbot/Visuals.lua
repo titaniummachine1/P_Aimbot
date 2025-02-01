@@ -1,4 +1,5 @@
 local G = require("PAimbot.Globals")
+local Config = require("PAimbot.Config")
 local Common = require("PAimbot.Common")
 
 local function L_line(start_pos, end_pos, secondary_line_size)
@@ -40,14 +41,14 @@ local function OnDraw()
         local pos2 = vPath[i + 1]
 
         if pos1 and pos2 then
-            if G.Menu.Visuals.Path_styles_selected == 1 or G.Menu.Visuals.Path_styles_selected == 3 then
+            if Config.visuals.Path_styles_selected == 1 or Config.visuals.path_styles_selected == 3 then
                 local screenPos1 = Common.WORLD2SCREEN(pos1)
                 local screenPos2 = Common.WORLD2SCREEN(pos2)
 
-                if screenPos1 and screenPos2 and (G.Menu.Visuals.Path_styles_selected ~= 3 or i % 2 == 1) then
+                if screenPos1 and screenPos2 and (G.Menu.Visuals.path_styles_selected ~= 3 or i % 2 == 1) then
                     Common.LINE(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
                 end
-            elseif G.Menu.Visuals.Path_styles_selected == 2 then
+            elseif Config.visuals.path_styles_selected == 2 then
                 L_line(pos1, pos2, 10)
             end
         end

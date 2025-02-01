@@ -1,6 +1,8 @@
 local BestTarget = {}
 
 local Common = require("PAimbot.Common")
+local Config = require("PAimbot.Config")
+
 local G = require("PAimbot.Globals")
 local eyeOffset = Vector3(0, 0, 75)
 
@@ -35,12 +37,12 @@ local function CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewA
     local angles = Common.Math.PositionAngles(localPlayerOrigin, playerOrigin)
     local fov = Common.Math.AngleFov(angles, localPlayerViewAngles)
 
-    if fov > G.Menu.Main.AimFov then
+    if fov > Config.main.aimfov then
         return 0
     end
 
     local distanceFactor = 1 / LogarithmicDistanceFactor(distance)
-    local fovFactor = Common.Math.RemapValClamped(fov, 0, G.Menu.Main.AimFov, 1, 0.7)
+    local fovFactor = Common.Math.RemapValClamped(fov, 0, Config.main.aimfov, 1, 0.7)
     local isVisible = Common.Helpers.VisPos(player, localPlayerOrigin + eyeOffset, playerOrigin + eyeOffset)
     local visibilityFactor = isVisible and 1 or 0.5
 

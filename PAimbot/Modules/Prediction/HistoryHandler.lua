@@ -3,6 +3,7 @@ local HistoryHandler = {}
 HistoryHandler.__index = HistoryHandler
 
 local G = require("PAimbot.Globals")
+local Config = require("PAimbot.Config")
 
 --------------------------------------------------------------------------------
 -- Configuration
@@ -24,7 +25,7 @@ function HistoryHandler:init()
     self.histories      = {} -- table<number, table<number, {strafeDelta: number}>>
     self.lastVelocities = {} -- table<number, number>
     self.lastDelta      = {} -- table<number, number> (for computing strafeDelta changes if needed)
-    self.maxHistoryTicks = G.Menu.Advanced.HistoryTicks or 4
+    self.maxHistoryTicks = Config.advanced.HistoryTicks or 4
 
     -- Single Kalman filter table for strafeDelta
     self.kalmanFiltersDelta = {} -- table<number, { x=..., p=..., ... }>
@@ -151,7 +152,7 @@ end
 --------------------------------------------------------------------------------
 -- updateAllValidTargets
 --------------------------------------------------------------------------------
-function HistoryHandler:updateAllValidTargets()
+function HistoryHandler:update()
     local players = entities.FindByClass("CTFPlayer")
 
     for _, player in pairs(players) do
