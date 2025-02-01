@@ -51,6 +51,8 @@ local function CalcualteShots()
 
     --finds best target
     G.Target = BestTarget.Get()
+
+    --print(pLocal:EstimateAbsVelocity():Length())
     --if not G.Target then return end
 
     Prediction:update(pLocal)
