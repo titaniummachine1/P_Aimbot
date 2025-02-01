@@ -111,7 +111,8 @@ function Prediction:update(player)
     end
 
     local playerIndex = player:GetIndex()
-    self.deltaStrafe = G.history[playerIndex] or { strafeDelta = 0 }
+    local predictionDelta = G.history[playerIndex] or { strafeDelta = 0 }
+    self.deltaStrafe = predictionDelta.strafeDelta
 end
 
 --------------------------------------------------------------------------------

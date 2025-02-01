@@ -62,7 +62,7 @@ local function CalcualteShots()
 end
 
 -- Register the drawing callback for rendering the trajectory
-callbacks.Unregister("CreateMove", G.scriptName .. "_ProjectileAimbot")
+callbacks.Unregister("CreateMove", "PAimbot_ProjectileAimbot")
 
 -- Register the drawing callback for rendering the trajectory
-callbacks.Register("CreateMove", G.scriptName .. "_ProjectileAimbot", CalcualteShots)
+callbacks.Register("CreateMove", "PAimbot_ProjectileAimbot", CalcualteShots)
