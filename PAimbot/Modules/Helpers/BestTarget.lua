@@ -48,7 +48,8 @@ local function CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewA
 end
 
 -- Main function to find the best target (backward compatible)
-function BestTarget.Get(me)
+function BestTarget.Get()
+    local me = entities.GetLocalPlayer()
     local players = entities.FindByClass("CTFPlayer")
     local bestTarget = nil
     local bestFactor = 0

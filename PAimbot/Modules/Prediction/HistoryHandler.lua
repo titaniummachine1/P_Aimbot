@@ -8,85 +8,89 @@ local G = require("PAimbot.Globals")
 -- Configuration
 --------------------------------------------------------------------------------
 HistoryHandler.kalmanConfig = {
-    processNoise       = 0.7,  -- Q for strafeDelta
-    processNoiseAcc    = 0.1,  -- Q for acceleration
-    baseMeasurementNoise   = 0.05, -- R baseline for strafeDelta
-    baseMeasurementNoiseAcc= 0.05, -- R baseline for acceleration
-    minimumHistoryCount    = 4,    -- Only compute std if at least x samples
+    -- We now only have processNoise for strafeDelta
+    processNoise = 1,
+    -- Measurement noise (R)
+    baseMeasurementNoise = 0.05,
+    -- Minimum number of samples before computing dynamic noise
+    minimumHistoryCount = 4,
 }
 
 --------------------------------------------------------------------------------
 -- Initialize the module and prepare storage
 --------------------------------------------------------------------------------
 function HistoryHandler:init()
-    self.histories       = {} -- table<number, table<number, {strafeDelta: number}>>
-    self.accHistories    = {} -- table<number, table<number, {acc: number}>>
-    self.lastVelocities  = {} -- table<number, number>
-    self.lastDelta       = {} -- table<number, number> (used to compute acceleration)
+    -- We only track strafeDelta now
+    self.histories      = {} -- table<number, table<number, {strafeDelta: number}>>
+    self.lastVelocities = {} -- table<number, number>
+    self.lastDelta      = {} -- table<number, number> (for computing strafeDelta changes if needed)
     self.maxHistoryTicks = G.Menu.Advanced.HistoryTicks or 4
 
-    -- Kalman filters for strafeDelta and acceleration
+    -- Single Kalman filter table for strafeDelta
     self.kalmanFiltersDelta = {} -- table<number, { x=..., p=..., ... }>
-    self.kalmanFiltersAcc   = {} -- table<number, { x=..., p=..., ... }>
 
-    G.history = {} -- Global table storing final results
+    -- Clear the global results
+    G.history = {}
 end
 
 --------------------------------------------------------------------------------
--- Standard deviation utility for strafeDelta or acceleration
+-- Standard deviation utility for strafeDelta
 --------------------------------------------------------------------------------
-local function computeStdDev(history, key)
+local function computeStdDev(history)
     if not history or #history < 2 then return nil end
 
     -- 1) Compute mean
     local sum = 0
     for _, data in ipairs(history) do
-        sum = sum + data[key]
+        sum = sum + data.strafeDelta
     end
     local mean = sum / #history
 
     -- 2) Compute variance
     local varianceSum = 0
     for _, data in ipairs(history) do
-        local diff = data[key] - mean
+        local diff = data.strafeDelta - mean
         varianceSum = varianceSum + diff * diff
     end
-    local variance = varianceSum / (#history - 1)
-    return math.sqrt(variance) -- std dev
+
+    local variance = varianceSum / (#history - 1) -- sample variance
+    return math.sqrt(variance)
 end
 
 --------------------------------------------------------------------------------
--- Dynamic R (measurement noise) for strafeDelta
+-- Dynamic measurement noise (R) for strafeDelta
 --------------------------------------------------------------------------------
-function HistoryHandler:calculateDynamicMeasurementNoiseDelta(entityIndex)
+function HistoryHandler:calculateDynamicMeasurementNoise(entityIndex)
     local history = self.histories[entityIndex]
     if not history or #history < self.kalmanConfig.minimumHistoryCount then
         return self.kalmanConfig.baseMeasurementNoise
     end
 
-    local stdDev = computeStdDev(history, "strafeDelta")
+    local stdDev = computeStdDev(history)
     if not stdDev then
         return self.kalmanConfig.baseMeasurementNoise
     end
+
     -- R = std^2 + baseline
     return (stdDev * stdDev) + self.kalmanConfig.baseMeasurementNoise
 end
 
 --------------------------------------------------------------------------------
--- Dynamic R (measurement noise) for acceleration
+-- Dynamic process noise (Q) for strafeDelta
 --------------------------------------------------------------------------------
-function HistoryHandler:calculateDynamicMeasurementNoiseAcc(entityIndex)
-    local history = self.accHistories[entityIndex]
+function HistoryHandler:calculateDynamicProcessNoise(entityIndex)
+    local history = self.histories[entityIndex]
     if not history or #history < self.kalmanConfig.minimumHistoryCount then
-        return self.kalmanConfig.baseMeasurementNoiseAcc
+        return self.kalmanConfig.processNoise
     end
 
-    local stdDev = computeStdDev(history, "acc")
+    local stdDev = computeStdDev(history)
     if not stdDev then
-        return self.kalmanConfig.baseMeasurementNoiseAcc
+        return self.kalmanConfig.processNoise
     end
-    -- R = std^2 + baseline
-    return (stdDev * stdDev) + self.kalmanConfig.baseMeasurementNoiseAcc
+
+    -- Example formula: Q = std^2 + baseProcessNoise
+    return (stdDev * stdDev) + self.kalmanConfig.processNoise
 end
 
 --------------------------------------------------------------------------------
@@ -98,6 +102,7 @@ function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
         filter = {
             x = measurement, -- initial state
             p = 1,
+            -- We'll override q, r below
             q = self.kalmanConfig.processNoise,
             r = self.kalmanConfig.baseMeasurementNoise,
             k = 0,
@@ -105,8 +110,11 @@ function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
         self.kalmanFiltersDelta[entityIndex] = filter
     end
 
-    -- Dynamically compute measurement noise for strafeDelta
-    filter.r = self:calculateDynamicMeasurementNoiseDelta(entityIndex)
+    -- Dynamic Q for strafeDelta
+    filter.q = self:calculateDynamicProcessNoise(entityIndex)
+
+    -- Dynamic R for strafeDelta
+    filter.r = self:calculateDynamicMeasurementNoise(entityIndex)
 
     -- Predict
     filter.p = filter.p + filter.q
@@ -120,59 +128,17 @@ function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
 end
 
 --------------------------------------------------------------------------------
--- Kalman update for acceleration
---------------------------------------------------------------------------------
-function HistoryHandler:kalmanUpdateAcc(entityIndex, measurement)
-    local filter = self.kalmanFiltersAcc[entityIndex]
-    if not filter then
-        filter = {
-            x = measurement, -- initial state
-            p = 1,
-            q = self.kalmanConfig.processNoiseAcc,
-            r = self.kalmanConfig.baseMeasurementNoiseAcc,
-            k = 0,
-        }
-        self.kalmanFiltersAcc[entityIndex] = filter
-    end
-
-    -- Dynamically compute measurement noise for acceleration
-    filter.r = self:calculateDynamicMeasurementNoiseAcc(entityIndex)
-
-    -- Predict
-    filter.p = filter.p + filter.q
-
-    -- Update
-    filter.k = filter.p / (filter.p + filter.r)
-    filter.x = filter.x + filter.k * (measurement - filter.x)
-    filter.p = (1 - filter.k) * filter.p
-
-    return filter.x
-end
-
---------------------------------------------------------------------------------
--- getWeightedStrafeDelta: same usage as before, but uses the new Kalman filter
+-- getWeightedStrafeDelta
 --------------------------------------------------------------------------------
 function HistoryHandler:getWeightedStrafeDelta(entityIndex)
     local history = self.histories[entityIndex]
     if not history or #history == 0 then
         return 0
     end
-    -- We'll feed the latest strafeDelta to the delta filter
+
+    -- The most recent strafeDelta
     local latestDelta = history[1].strafeDelta
     return self:kalmanUpdateDelta(entityIndex, latestDelta)
-end
-
---------------------------------------------------------------------------------
--- getAcceleration: compute & filter acceleration
---------------------------------------------------------------------------------
-function HistoryHandler:getAcceleration(entityIndex)
-    local accHistory = self.accHistories[entityIndex]
-    if not accHistory or #accHistory == 0 then
-        return 0
-    end
-    -- The newest acceleration measurement
-    local latestAcc = accHistory[1].acc
-    return self:kalmanUpdateAcc(entityIndex, latestAcc)
 end
 
 --------------------------------------------------------------------------------
@@ -183,7 +149,7 @@ function HistoryHandler:isValidTarget(player)
 end
 
 --------------------------------------------------------------------------------
--- updateAllValidTargets: main logic to fill history arrays and produce filtered results
+-- updateAllValidTargets
 --------------------------------------------------------------------------------
 function HistoryHandler:updateAllValidTargets()
     local players = entities.FindByClass("CTFPlayer")
@@ -193,7 +159,7 @@ function HistoryHandler:updateAllValidTargets()
             local entityIndex = player:GetIndex()
             local velocity = player:EstimateAbsVelocity()
 
-            -- If we have no recorded velocity, initialize
+            -- If we have no recorded velocity angle, initialize
             if not self.lastVelocities[entityIndex] then
                 self.lastVelocities[entityIndex] = velocity:Angles().y
             end
@@ -202,40 +168,26 @@ function HistoryHandler:updateAllValidTargets()
             local strafeDelta = currentVelocityAngle - self.lastVelocities[entityIndex]
             self.lastVelocities[entityIndex] = currentVelocityAngle
 
-            -- 1) Insert strafeDelta into history
+            -- Insert strafeDelta into history
             self.histories[entityIndex] = self.histories[entityIndex] or {}
             table.insert(self.histories[entityIndex], 1, { strafeDelta = strafeDelta })
             if #self.histories[entityIndex] > self.maxHistoryTicks then
                 table.remove(self.histories[entityIndex])
             end
 
-            -- 2) Compute acceleration = difference between the new strafeDelta and the last
-            local prevDelta = self.lastDelta[entityIndex] or strafeDelta
-            local acceleration = strafeDelta - prevDelta
-            self.lastDelta[entityIndex] = strafeDelta
-
-            -- Insert acceleration into its own history
-            self.accHistories[entityIndex] = self.accHistories[entityIndex] or {}
-            table.insert(self.accHistories[entityIndex], 1, { acc = acceleration })
-            if #self.accHistories[entityIndex] > self.maxHistoryTicks then
-                table.remove(self.accHistories[entityIndex])
-            end
-
-            -- 3) Get the Kalman-filtered values
+            -- Use the Kalman filter to get a smoothed strafeDelta
             local filteredDelta = self:getWeightedStrafeDelta(entityIndex)
-            local filteredAcc   = self:getAcceleration(entityIndex)
 
-            -- 4) Store them in the global table (or wherever else you want)
+            -- Save in the global table
             G.history[entityIndex] = {
-                strafeDelta  = filteredDelta,
-                acceleration = filteredAcc
+                strafeDelta = filteredDelta
             }
         end
     end
 end
 
 --------------------------------------------------------------------------------
--- Initialize the module
+-- Initialize and return the module
 --------------------------------------------------------------------------------
 local historyHandlerInstance = setmetatable({}, HistoryHandler)
 historyHandlerInstance:init()

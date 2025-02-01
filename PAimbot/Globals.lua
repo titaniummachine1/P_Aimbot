@@ -46,7 +46,7 @@ G.Default_Menu = {
         SplashBot = true,
         SplashAccuracy = 5,
         PredTicks = 132,
-        HistoryTicks = 20,
+        HistoryTicks = 66,
         Hitchance_Accuracy = 10,
 
         StrafePrediction = true,
