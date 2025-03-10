@@ -20,7 +20,7 @@ end
 local function IsValidTarget(me, player)
     return player and player:IsAlive()
         and not player:IsDormant()
-        and player == me
+        and player ~= me
         and (gui.GetValue("ignore cloaked") == 0 or not player:InCond(4))
 end
 

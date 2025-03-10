@@ -1,55 +1,46 @@
 ---@class Prediction
-local Prediction = {}
-Prediction.__index = Prediction
+local Prediction        = {}
+Prediction.__index      = Prediction
 
-local Common = require("PAimbot.Common")
-local G = require("PAimbot.Globals")
+local Common            = require("PAimbot.Common")
+local G                 = require("PAimbot.Globals")
 
 -- Constants and helpers.
-local vUp         = Vector3(0, 0, 1)
-local emptyVector = Vector3(0, 0, 0)
-local ignoreEntities = { "CTFAmmoPack", "CTFDroppedWeapon" }
-local MAX_SPEED   = 450 -- Default max speed if not provided by player.
+local vUp               = Vector3(0, 0, 1)
+local nullVector        = Vector3(0, 0, 0)
+local ignoreEntities    = { "CTFAmmoPack", "CTFDroppedWeapon" }
+local MAX_SPEED         = 450 -- Default max speed if not provided by player.
+
+-- Create a lookup table for faster class checks
+local ignoreClassLookup = {}
+for _, class in ipairs(ignoreEntities) do
+    ignoreClassLookup[class] = true
+end
 
 --------------------------------------------------------------------------------
 -- Helper Functions
 --------------------------------------------------------------------------------
 -- Determines if an entity should be considered for collision
 local function shouldHitEntityFun(entity, player)
-    for _, ignoreEntity in ipairs(ignoreEntities) do
-        if entity:GetClass() == ignoreEntity then
-            return false
-        end
-    end
+    -- Use logical operators to create a single return statement
+    -- Each condition evaluates to true/false and we return true only if all checks pass
+    local entityClass = entity:GetClass()
+    local sameTeam = entity:GetTeamNumber() == player:GetTeamNumber()
     local pos = entity:GetAbsOrigin() + Vector3(0, 0, 1)
     local contents = engine.GetPointContents(pos)
-    if contents ~= CONTENTS_EMPTY then return false end
-    if entity == player then return false end
-    if entity:GetTeamNumber() == player:GetTeamNumber() then return false end
-    return true
+
+    return not (
+        ignoreClassLookup[entityClass] or  -- Not in ignore list
+        entity == player or                -- Not the player
+        sameTeam or                        -- Not on same team
+        contents ~= CONTENTS_EMPTY         -- Not in empty space
+    )
 end
 
 -- Simple check whether the player is on the ground.
 local function IsOnGround(player)
     local pFlags = player:GetPropInt("m_fFlags")
     return (pFlags & FL_ONGROUND) == 1
-end
-
--- Provide a simple linear interpolation if not defined.
-if not Common.LerpVector then
-    function Common.LerpVector(t, a, b)
-        return a * (1 - t) + b * t
-    end
-end
-
--- Rotate a vector about the Z-axis by a given angle (degrees).
-if not Common.RotateVector then
-    function Common.RotateVector(vec, angleDeg)
-        local rad = math.rad(angleDeg)
-        local cosA = math.cos(rad)
-        local sinA = math.sin(rad)
-        return Vector3(vec.x * cosA - vec.y * sinA, vec.x * sinA + vec.y * cosA, vec.z)
-    end
 end
 
 --------------------------------------------------------------------------------
@@ -59,7 +50,7 @@ function Prediction:reset()
     -- Clear simulation history.
     self.currentTick = 0
     self.cachedPredictions = { pos = {}, vel = {}, onGround = {} }
-    
+
     -- Clear physics variables.
     self.gravity = nil
     self.stepHeight = nil
@@ -73,9 +64,9 @@ function Prediction:reset()
     self.shouldHitEntity = nil
 
     -- Variables for move intent simulation.
-    self.moveIntent = nil          -- Current intended movement vector.
-    self.initialMoveIntent = nil   -- Baseline movement vector at start.
-    self.accumulatedStrafe = 0     -- Accumulated strafe angle (in degrees).
+    self.moveIntent = nil        -- Current intended movement vector.
+    self.initialMoveIntent = nil -- Baseline movement vector at start.
+    self.accumulatedStrafe = 0   -- Accumulated strafe angle (in degrees).
 end
 
 function Prediction:init()
@@ -137,7 +128,7 @@ function Prediction:predictTick()
 
     -- Compute the desired horizontal direction from the move intent.
     local desiredDir = Common.Normalize(Vector3(self.moveIntent.x, self.moveIntent.y, 0))
-    local desiredSpeed = self.MAX_SPEED  -- Full input implies full speed.
+    local desiredSpeed = self.MAX_SPEED -- Full input implies full speed.
 
     -- --- Friction: reduce current horizontal speed if on ground.
     local currentHorizontal = Vector3(self.velocity.x, self.velocity.y, 0)
@@ -192,13 +183,13 @@ function Prediction:predictTick()
     end
 
     -- --- Ground Collision Handling ---
-    local downStep = self.onGround and self.vStep or emptyVector
+    local downStep = self.onGround and self.vStep or nullVector
     local groundTrace = Common.TRACE_HULL(
         pos + self.vStep,
         pos - downStep,
         self.hitbox.Min,
         self.hitbox.Max,
-        MASK_SHOT_HULL,
+        MASK_SHOT_HULL, --dw its defined idk why it is showign error
         self.shouldHitEntity
     )
     if groundTrace.fraction < 1 then

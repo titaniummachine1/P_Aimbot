@@ -6,60 +6,64 @@ local G = require("PAimbot.Globals")
 local Config = require("PAimbot.Config")
 
 --------------------------------------------------------------------------------
--- Configuration
+-- Kalman Filter Configuration
 --------------------------------------------------------------------------------
 HistoryHandler.kalmanConfig = {
-    -- We now only have processNoise for strafeDelta
-    processNoise = 1,
-    -- Measurement noise (R)
-    baseMeasurementNoise = 0.05,
-    -- Minimum number of samples before computing dynamic noise
-    minimumHistoryCount = 4,
+    processNoise = 0.7,              -- Base process noise (Q)
+    baseMeasurementNoise = 0.05,   -- Base measurement noise (R)
+    minimumHistoryCount = 4,       -- Minimum sample count for dynamic noise computation
 }
 
 --------------------------------------------------------------------------------
--- Initialize the module and prepare storage
+-- Initialize HistoryHandler storage
 --------------------------------------------------------------------------------
 function HistoryHandler:init()
-    -- We only track strafeDelta now
-    self.histories      = {} -- table<number, table<number, {strafeDelta: number}>>
-    self.lastVelocities = {} -- table<number, number>
-    self.lastDelta      = {} -- table<number, number> (for computing strafeDelta changes if needed)
+    -- Table to store raw strafe delta samples per entity:
+    -- histories[entityIndex] = { {strafeDelta = value}, ... }
+    self.histories = {}
+    
+    -- For computing the difference between successive velocity angles.
+    self.lastVelocities = {} -- last recorded angle for each entity
+    
+    -- (Optional) Last delta value (if needed for further computations)
+    self.lastDelta = {} 
+
+    -- Maximum number of history samples to store per entity.
     self.maxHistoryTicks = Config.advanced.HistoryTicks or 4
 
-    -- Single Kalman filter table for strafeDelta
-    self.kalmanFiltersDelta = {} -- table<number, { x=..., p=..., ... }>
+    -- Table of Kalman filters for smoothing each entity’s strafe delta.
+    self.kalmanFiltersDelta = {} 
 
-    -- Clear the global results
+    -- Clear the global history table.
     G.history = {}
 end
 
 --------------------------------------------------------------------------------
--- Standard deviation utility for strafeDelta
+-- Compute sample standard deviation of strafeDelta from a history table.
 --------------------------------------------------------------------------------
 local function computeStdDev(history)
-    if not history or #history < 2 then return nil end
+    if not history or #history < 2 then 
+        return nil 
+    end
 
-    -- 1) Compute mean
     local sum = 0
     for _, data in ipairs(history) do
         sum = sum + data.strafeDelta
     end
     local mean = sum / #history
 
-    -- 2) Compute variance
     local varianceSum = 0
     for _, data in ipairs(history) do
         local diff = data.strafeDelta - mean
         varianceSum = varianceSum + diff * diff
     end
 
-    local variance = varianceSum / (#history - 1) -- sample variance
-    return math.sqrt(variance)
+    local sampleVariance = varianceSum / (#history - 1)
+    return math.sqrt(sampleVariance)
 end
 
 --------------------------------------------------------------------------------
--- Dynamic measurement noise (R) for strafeDelta
+-- Calculate dynamic measurement noise (R) using the sample variance.
 --------------------------------------------------------------------------------
 function HistoryHandler:calculateDynamicMeasurementNoise(entityIndex)
     local history = self.histories[entityIndex]
@@ -72,12 +76,12 @@ function HistoryHandler:calculateDynamicMeasurementNoise(entityIndex)
         return self.kalmanConfig.baseMeasurementNoise
     end
 
-    -- R = std^2 + baseline
+    -- Measurement noise R = (stdDev)^2 + baseline noise.
     return (stdDev * stdDev) + self.kalmanConfig.baseMeasurementNoise
 end
 
 --------------------------------------------------------------------------------
--- Dynamic process noise (Q) for strafeDelta
+-- Calculate dynamic process noise (Q) using the sample variance.
 --------------------------------------------------------------------------------
 function HistoryHandler:calculateDynamicProcessNoise(entityIndex)
     local history = self.histories[entityIndex]
@@ -90,37 +94,36 @@ function HistoryHandler:calculateDynamicProcessNoise(entityIndex)
         return self.kalmanConfig.processNoise
     end
 
-    -- Example formula: Q = std^2 + baseProcessNoise
+    -- Process noise Q = (stdDev)^2 + base process noise.
     return (stdDev * stdDev) + self.kalmanConfig.processNoise
 end
 
 --------------------------------------------------------------------------------
--- Kalman update for strafeDelta
+-- Kalman update for strafeDelta for a given entity.
+-- This function smooths the raw measurement (most recent sample) using a simple
+-- Kalman filter.
 --------------------------------------------------------------------------------
 function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
     local filter = self.kalmanFiltersDelta[entityIndex]
     if not filter then
         filter = {
-            x = measurement, -- initial state
-            p = 1,
-            -- We'll override q, r below
-            q = self.kalmanConfig.processNoise,
-            r = self.kalmanConfig.baseMeasurementNoise,
-            k = 0,
+            x = measurement,        -- initial state
+            p = 1,                  -- initial error covariance
+            q = self.kalmanConfig.processNoise,  -- process noise (will be updated dynamically)
+            r = self.kalmanConfig.baseMeasurementNoise, -- measurement noise (updated dynamically)
+            k = 0,                  -- Kalman gain (to be computed)
         }
         self.kalmanFiltersDelta[entityIndex] = filter
     end
 
-    -- Dynamic Q for strafeDelta
+    -- Update process and measurement noise dynamically.
     filter.q = self:calculateDynamicProcessNoise(entityIndex)
-
-    -- Dynamic R for strafeDelta
     filter.r = self:calculateDynamicMeasurementNoise(entityIndex)
 
-    -- Predict
+    -- Predict step: increase the error covariance.
     filter.p = filter.p + filter.q
 
-    -- Update
+    -- Update step: compute Kalman gain, update the state, and reduce covariance.
     filter.k = filter.p / (filter.p + filter.r)
     filter.x = filter.x + filter.k * (measurement - filter.x)
     filter.p = (1 - filter.k) * filter.p
@@ -129,7 +132,8 @@ function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
 end
 
 --------------------------------------------------------------------------------
--- getWeightedStrafeDelta
+-- Retrieve a weighted (smoothed) strafe delta for a given entity.
+-- Uses the most recent sample and runs it through the Kalman filter.
 --------------------------------------------------------------------------------
 function HistoryHandler:getWeightedStrafeDelta(entityIndex)
     local history = self.histories[entityIndex]
@@ -137,49 +141,49 @@ function HistoryHandler:getWeightedStrafeDelta(entityIndex)
         return 0
     end
 
-    -- The most recent strafeDelta
-    local latestDelta = history[1].strafeDelta
-    return self:kalmanUpdateDelta(entityIndex, latestDelta)
+    local mostRecentDelta = history[1].strafeDelta
+    return self:kalmanUpdateDelta(entityIndex, mostRecentDelta)
 end
 
 --------------------------------------------------------------------------------
--- Valid target check
+-- Check if a player is a valid target for history tracking.
 --------------------------------------------------------------------------------
 function HistoryHandler:isValidTarget(player)
     return player and player:IsAlive() and not player:IsDormant()
 end
 
 --------------------------------------------------------------------------------
--- updateAllValidTargets
+-- Update history for all valid targets.
+-- For each valid player, compute the change in velocity angle and store it.
+-- Then, smooth the sample using the Kalman filter and save the result globally.
 --------------------------------------------------------------------------------
 function HistoryHandler:update()
     local players = entities.FindByClass("CTFPlayer")
-
     for _, player in pairs(players) do
         if self:isValidTarget(player) then
             local entityIndex = player:GetIndex()
             local velocity = player:EstimateAbsVelocity()
 
-            -- If we have no recorded velocity angle, initialize
+            -- Initialize last recorded velocity angle if not present.
             if not self.lastVelocities[entityIndex] then
                 self.lastVelocities[entityIndex] = velocity:Angles().y
             end
 
-            local currentVelocityAngle = velocity:Angles().y
-            local strafeDelta = currentVelocityAngle - self.lastVelocities[entityIndex]
-            self.lastVelocities[entityIndex] = currentVelocityAngle
+            local currentAngle = velocity:Angles().y
+            local strafeDelta = currentAngle - self.lastVelocities[entityIndex]
+            self.lastVelocities[entityIndex] = currentAngle
 
-            -- Insert strafeDelta into history
+            -- Insert the new strafe delta sample at the beginning of the history.
             self.histories[entityIndex] = self.histories[entityIndex] or {}
             table.insert(self.histories[entityIndex], 1, { strafeDelta = strafeDelta })
             if #self.histories[entityIndex] > self.maxHistoryTicks then
                 table.remove(self.histories[entityIndex])
             end
 
-            -- Use the Kalman filter to get a smoothed strafeDelta
+            -- Compute a smoothed strafe delta.
             local filteredDelta = self:getWeightedStrafeDelta(entityIndex)
 
-            -- Save in the global table
+            -- Save the smoothed value in the global history table.
             G.history[entityIndex] = {
                 strafeDelta = filteredDelta
             }
@@ -188,7 +192,7 @@ function HistoryHandler:update()
 end
 
 --------------------------------------------------------------------------------
--- Initialize and return the module
+-- Create and return the singleton instance.
 --------------------------------------------------------------------------------
 local historyHandlerInstance = setmetatable({}, HistoryHandler)
 historyHandlerInstance:init()

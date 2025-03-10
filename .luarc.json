@@ -1,0 +1,19 @@
+{
+  "diagnostics": {
+    "globals": [
+      "Vector3",
+      "CONTENTS_EMPTY",
+      "MASK_SHOT_HULL",
+      "FL_ONGROUND",
+      "client",
+      "engine"
+    ],
+    "disable": ["need-check-nil"]
+  },
+  "$schema": "https://raw.githubusercontent.com/sumneko/vscode-lua/master/setting/schema.json",
+  "workspace": {
+    "library": [
+      "${3rd}/lmaobox/library"
+    ]
+  }
+} 

@@ -37,11 +37,11 @@ local function IsValidWeapon(pWeapon)
 end
 
 -- Function to draw the trajectory
-local function CalcualteShots()
+local function Main()
     local pLocal = entities.GetLocalPlayer()
         if not IsValidLocalPlayer(pLocal) then return end
     local weapon = pLocal:GetPropEntity("m_hActiveWeapon")
-        if not IsValidWeapon(weapon) then return end
+        --if not IsValidWeapon(weapon) then return end
 
     --local ProjData = ProjectileData.GetProjectileData(pLocal, weapon)
     --if not ProjData then return end
@@ -51,12 +51,10 @@ local function CalcualteShots()
 
     --finds best target
     G.Target = BestTarget.Get()
+    if not G.Target then return end
 
-    --print(pLocal:EstimateAbsVelocity():Length())
-    --if not G.Target then return end
-
-    Prediction:update(pLocal)
-    Prediction:predict(132)
+    Prediction:update(G.Target)
+    Prediction:predict(33)
 
     G.PredictionData.PredPath = Prediction:history()
 end
@@ -65,4 +63,4 @@ end
 callbacks.Unregister("CreateMove", "PAimbot_ProjectileAimbot")
 
 -- Register the drawing callback for rendering the trajectory
-callbacks.Register("CreateMove", "PAimbot_ProjectileAimbot", CalcualteShots)
+callbacks.Register("CreateMove", "PAimbot_ProjectileAimbot", Main)
