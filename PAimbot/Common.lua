@@ -24,7 +24,7 @@ Common.Notify = Common.UI.Notify
 Common.TF2 = Common.Lib.TF2
 Common.Utils = Common.Lib.Utils
 Common.Math, Common.Conversion = Common.Utils.Math, Common.Utils.Conversion
-Common.WPlayer, Common.PR = Common.TF2.WPlayer, Common.TF2.PlayerResource
+Common.WPlayer, Common.WWeapon, Common.PR = Common.TF2.WPlayer, Common.TF2.WWeapon, Common.TF2.PlayerResource
 Common.Helpers = Common.TF2.Helpers
 Common.Prediction = Common.TF2.Prediction
 
@@ -37,6 +37,11 @@ Common.WORLD2SCREEN = client.WorldToScreen;
 Common.POLYGON = draw.TexturedPolygon;
 Common.LINE = draw.Line;
 Common.COLOR = draw.Color;
+
+-- Vector rotation function (used by projectile data)
+Common.VEC_ROT = function(a, b)
+    return (b:Forward() * a.x) + (b:Right() * a.y) + (b:Up() * a.z)
+end
 
 -- Function to normalize a vector
 function Common.Normalize(vector)
@@ -76,6 +81,45 @@ function Common.GetHitboxPos(player, hitboxID)
     if not hitbox then return nil end
 
     return (hitbox[1] + hitbox[2]) * 0.5
+end
+
+-- Validates if a player entity is a valid target
+---@param entity Entity The entity to check
+---@param checkFriend boolean? Check if the entity is a friend
+---@param checkDormant boolean? Check if the entity is dormant
+---@param skipEntity Entity? Optional entity to skip
+---@return boolean Whether the entity is valid
+function Common.IsValidPlayer(entity, checkFriend, checkDormant, skipEntity)
+    if not entity or not entity:IsValid() then
+        return false
+    end
+
+    if skipEntity and entity == skipEntity then
+        return false
+    end
+
+    if not entity:IsAlive() then
+        return false
+    end
+
+    if checkDormant and entity:IsDormant() then
+        return false
+    end
+
+    if checkFriend and entity:GetTeamNumber() == entities.GetLocalPlayer():GetTeamNumber() then
+        return false
+    end
+
+    return true
+end
+
+-- Get SteamID64 for a player
+---@param player table The player wrapper
+---@return string|number The player's SteamID64
+function Common.GetSteamID64(player)
+    if not player then return 0 end
+    local info = client.GetPlayerInfo(player:GetIndex())
+    return info and info.SteamID or 0
 end
 
 -- Returns the name of a keycode
@@ -127,6 +171,17 @@ function Common.GetPressedKey()
     end
 
     return nil
+end
+
+-- Clamp function for projectile calculations
+function Common.clamp(a, b, c)
+    return (a < b) and b or (a > c) and c or a
+end
+
+-- Convert percentage to RGB value
+function Common.convertPercentageToRGB(percentage)
+    local value = math.floor(percentage / 100 * 255)
+    return math.max(0, math.min(255, value))
 end
 
 --[[ Callbacks ]]

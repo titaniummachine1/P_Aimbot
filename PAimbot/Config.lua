@@ -20,42 +20,45 @@ local defaultConfig = {
             key = KEY_LSHIFT,
             aimKeyName = "LSHIFT",
         },
-        aimfov = 180,
+        aimfov = 60,
         minHitchance = 40,
         autoShoot = true,
         silent = true,
+        minDistance = 100,
+        maxDistance = 1500,
         aimPos = {
             currentAimPos = Hitbox.Feet,
-            arrow = Hitbox.Head,
+            hitscan = Hitbox.Head,
             projectile = Hitbox.Feet,
-        },
-        aimModes = {
-            legit = 1,
-            rage = 2,
         },
     },
     advanced = {
-        splashBot = true,
-        splashAccuracy = 5,
-        predTicks = 132,
+        splashPrediction = true,
+        splashAccuracy = 4,
+        predTicks = 77,
         historyTicks = 66,
         hitchanceAccuracy = 10,
+        accuracyWeight = 5,
         strafePrediction = true,
-        strafeSamples = 17,
+        strafeSamples = 4,
         -- 0.5 to 8, determines the size of the segments traced; lower values = worse performance (default 2.5)
-        projectileSegments = 2.5,
+        projectileSegments = 10,
         debugInfo = true,
+        aimModes = {
+            leading = true,
+            trailing = false,
+        },
     },
     visuals = {
         active = true,
         visualizePath = true,
         path_styles = { "Line", "Alt Line", "Dashed" },
-        path_styles_selected = 2,
-        visualizeHitchance = true,
-        visualizeProjectile = true,
-        visualizeHitPos = true,
-        crosshair = true,
-        nccPred = true,
+        path_styles_selected = 1,
+        visualizeHitchance = false,
+        visualizeProjectile = false,
+        visualizeHitPos = false,
+        crosshair = false,
+        nccPred = false,
         polygon = {
             enabled = true,
             r = 255,
@@ -87,6 +90,16 @@ local defaultConfig = {
             g = 0,
             b = 0,
             a = 155,
+        },
+    },
+    menu = {
+        isOpen = true,
+        toggleKey = KEY_INSERT,
+        lastToggleTime = 0,
+        tabs = {
+            main = true,
+            advanced = false,
+            visuals = false,
         },
     },
 }
@@ -198,42 +211,9 @@ function Config:Load()
             self:Save()
         end
     else
-        local warnMsg = "Config file not found. Creating a new config."
-        printc(255, 0, 0, 255, warnMsg)
+        printc(255, 215, 0, 255, "Config file not found. Creating default config: " .. filePath)
         self:Save()
     end
 end
-
-local function OnUnload()
-    Config:Save()
-end
-
-callbacks.Unregister("Unload", G.scriptName .. "_CleanupObjects")
-callbacks.Register("Unload", G.scriptName .. "_CleanupObjects", OnUnload)
-
---------------------------------------------------------------------------------
--- Optional unit test function for verifying saving and loading.
---------------------------------------------------------------------------------
-function Config:UnitTest()
-    print("----- Running Config Unit Test -----")
-    print("Original config:")
-    print(json.encode(copyMatchingKeys(self, defaultConfig)))
-    -- Modify one value: change aimfov from 180 to 200.
-    self.main.aimfov = 200
-    print("Modified aimfov to:", self.main.aimfov)
-    self:Save()
-    self:Load()
-    print("Reloaded config:")
-    print(json.encode(copyMatchingKeys(self, defaultConfig)))
-    if self.main.aimfov == 200 then
-        print("Unit Test Passed: aimfov correctly saved and loaded.")
-    else
-        print("Unit Test Failed: aimfov did not persist correctly.")
-    end
-    print("----- End of Unit Test -----")
-end
-
--- Auto-load the configuration when the module is required.
-Config:Load()
 
 return Config

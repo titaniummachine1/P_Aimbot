@@ -37,13 +37,13 @@ local function OnDraw()
         return
     end
 
-    -- Check if prediction data exists
-    if not G.PredictionData or not G.PredictionData.PredPath then
+    -- Check if aimbot prediction data exists
+    if not G.Aimbot or not G.Aimbot.TargetPredictionPath then
         return
     end
 
-    local vPath = G.PredictionData.PredPath.pos
-    if not vPath or #vPath < 2 then
+    local posArray = G.Aimbot.TargetPredictionPath
+    if not posArray or type(posArray) ~= "table" or #posArray < 2 then
         return
     end
 
@@ -55,9 +55,9 @@ local function OnDraw()
 
     if selectedStyle == 1 then
         -- Style 1: Simple Line
-        for i = 1, #vPath - 1 do
-            local pos1 = vPath[i]
-            local pos2 = vPath[i + 1]
+        for i = 1, #posArray - 1 do
+            local pos1 = posArray[i]
+            local pos2 = posArray[i + 1]
 
             if pos1 and pos2 then
                 local screenPos1 = client.WorldToScreen(pos1)
@@ -70,19 +70,19 @@ local function OnDraw()
         end
     elseif selectedStyle == 2 then
         -- Style 2: Alt Line (L_line with perpendicular)
-        for i = 1, #vPath - 1 do
-            local pos1 = vPath[i]
-            local pos2 = vPath[i + 1]
+        for i = 1, #posArray - 1 do
+            local pos1 = posArray[i]
+            local pos2 = posArray[i + 1]
 
             if pos1 and pos2 then
-                L_line(pos1, pos2, 10) -- 5 is the secondary line size
+                L_line(pos1, pos2, 10) -- 10 is the secondary line size
             end
         end
     elseif selectedStyle == 3 then
         -- Style 3: Dashed Line
-        for i = 1, #vPath - 1 do
-            local pos1 = vPath[i]
-            local pos2 = vPath[i + 1]
+        for i = 1, #posArray - 1 do
+            local pos1 = posArray[i]
+            local pos2 = posArray[i + 1]
 
             if pos1 and pos2 then
                 local screenPos1 = client.WorldToScreen(pos1)
@@ -102,9 +102,9 @@ local function OnDraw()
     if Config.visuals.outline.line_and_flags and selectedStyle ~= 2 then -- L_line already has its own styling
         draw.Color(Config.visuals.outline.r, Config.visuals.outline.g, Config.visuals.outline.b, Config.visuals.outline
             .a)
-        for i = 1, #vPath - 1 do
-            local pos1 = vPath[i]
-            local pos2 = vPath[i + 1]
+        for i = 1, #posArray - 1 do
+            local pos1 = posArray[i]
+            local pos2 = posArray[i + 1]
 
             if pos1 and pos2 then
                 local screenPos1 = client.WorldToScreen(pos1)
@@ -122,9 +122,9 @@ local function OnDraw()
     end
 
     -- Draw start and end points if enabled
-    if Config.visuals.visualizeHitPos and #vPath > 0 then
-        local startPos = vPath[1]
-        local endPos = vPath[#vPath]
+    if Config.visuals.visualizeHitPos and #posArray > 0 then
+        local startPos = posArray[1]
+        local endPos = posArray[#posArray]
 
         -- Draw start point
         local startScreen = client.WorldToScreen(startPos)

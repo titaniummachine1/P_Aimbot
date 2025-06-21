@@ -1,266 +1,273 @@
---[[           ProjectileData Module         ]]--
---[[        Updated to include all           ]]--
---[[          projectile types               ]]--
+--[[           ProjectileData Module         ]] --
+--[[        Updated to include all           ]] --
+--[[          projectile types               ]] --
 
 -- Required modules or APIs
-local Common = require("PAimbot.Common")  -- Ensure this module contains the CLAMP function
+local Common = require("PAimbot.Common") -- Ensure this module contains the CLAMP function
 
 -- ProjectileData Module
 local ProjectileData = {}
 
 -- Constants
-local FL_DUCKING = 2  -- Adjust based on your environment
+local FL_DUCKING = 2 -- Adjust based on your environment
 local UP_VECTOR = Vector3(0, 0, 1)
 
--- Predefined offsets and collision sizes for projectiles
-local OFFSET_TABLE = {
-    stickyBomb = Vector3(16, 8, -6),
-    huntsman = Vector3(23.5, -8, -3),
-    flareGun = Vector3(23.5, 12, -3),
-    syringeGun = Vector3(16, 6, -8),
-    rocketLauncher = Vector3(23.5, -8, -3),
-    jarate = Vector3(23.5, -8, -3),
-    grenadeLauncher = Vector3(16, 8, -6),
-    flamethrower = Vector3(0, 0, 0),  -- Adjust as necessary
-    energyBall = Vector3(23.5, -8, -3),
-    throwable = Vector3(23.5, -8, -3),
-    grapplingHook = Vector3(23.5, -8, -3)
-}
+-- Projectile types
+local PROJECTILE_TYPE_BASIC = 0
+local PROJECTILE_TYPE_PSEUDO = 1
+local PROJECTILE_TYPE_SIMUL = 2
 
-local COLLISION_SIZE_TABLE = {
-    none = Vector3(0, 0, 0),
-    small = Vector3(1, 1, 1),
-    medium = Vector3(3.2, 3.2, 3.2),
-    large = Vector3(3, 3, 3)
-}
-
--- Projectile Types Enumeration
-local E_ProjectileType = {
-    TF_PROJECTILE_NONE = 0,
-    TF_PROJECTILE_BULLET = 1,
-    TF_PROJECTILE_ROCKET = 2,
-    TF_PROJECTILE_PIPEBOMB = 3,
-    TF_PROJECTILE_PIPEBOMB_REMOTE = 4,
-    TF_PROJECTILE_SYRINGE = 5,
-    TF_PROJECTILE_FLARE = 6,
-    TF_PROJECTILE_JAR = 7,
-    TF_PROJECTILE_ARROW = 8,
-    TF_PROJECTILE_FLAME_ROCKET = 9,
-    TF_PROJECTILE_JAR_MILK = 10,
-    TF_PROJECTILE_HEALING_BOLT = 11,
-    TF_PROJECTILE_ENERGY_BALL = 12,
-    TF_PROJECTILE_ENERGY_RING = 13,
-    TF_PROJECTILE_PIPEBOMB_PRACTICE = 14,
-    TF_PROJECTILE_CLEAVER = 15,
-    TF_PROJECTILE_STICKY_BALL = 16,
-    TF_PROJECTILE_CANNONBALL = 17,
-    TF_PROJECTILE_BUILDING_REPAIR_BOLT = 18,
-    TF_PROJECTILE_FESTIVE_ARROW = 19,
-    TF_PROJECTILE_THROWABLE = 20,
-    TF_PROJECTILE_SPELL = 21,
-    TF_PROJECTILE_FESTIVE_JAR = 22,
-    TF_PROJECTILE_FESTIVE_HEALING_BOLT = 23,
-    TF_PROJECTILE_BREADMONSTER_JARATE = 24,
-    TF_PROJECTILE_BREADMONSTER_MADMILK = 25,
-    TF_PROJECTILE_GRAPPLINGHOOK = 26,
-    TF_PROJECTILE_SENTRY_ROCKET = 27,
-    TF_PROJECTILE_BREAD_MONSTER = 28
-}
-
--- Function to get the current charge time of a weapon
-local function GetCurrentChargeTime(weapon)
-    local chargeBeginTime = weapon:GetChargeBeginTime() or 0
-    if chargeBeginTime ~= 0 then
-        chargeBeginTime = globals.CurTime() - chargeBeginTime
+-- Weapon definition mappings
+local aItemDefinitions = {}
+local function AppendItemDefinitions(iType, ...)
+    for _, i in pairs({ ... }) do
+        aItemDefinitions[i] = iType
     end
-    return chargeBeginTime
 end
 
+local function DefineProjectileDefinition(tbl)
+    return {
+        m_iType = PROJECTILE_TYPE_BASIC,
+        m_vecOffset = tbl.vecOffset or Vector3(0, 0, 0),
+        m_vecAbsoluteOffset = tbl.vecAbsoluteOffset or Vector3(0, 0, 0),
+        m_vecAngleOffset = tbl.vecAngleOffset or Vector3(0, 0, 0),
+        m_vecVelocity = tbl.vecVelocity or Vector3(0, 0, 0),
+        m_vecAngularVelocity = tbl.vecAngularVelocity or Vector3(0, 0, 0),
+        m_vecMins = tbl.vecMins or (not tbl.vecMaxs) and Vector3(0, 0, 0) or -tbl.vecMaxs,
+        m_vecMaxs = tbl.vecMaxs or (not tbl.vecMins) and Vector3(0, 0, 0) or -tbl.vecMins,
+        m_flGravity = tbl.flGravity or 0.001,
+        m_flDrag = tbl.flDrag or 0,
+        m_iAlignDistance = tbl.iAlignDistance or 0,
+        m_sModelName = tbl.sModelName or "",
+
+        GetOffset = not tbl.GetOffset
+            and function(self, bDucking, bIsFlipped)
+                return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
+                    or self.m_vecOffset
+            end
+            or tbl.GetOffset,
+
+        GetFirePosition = tbl.GetFirePosition
+            or function(self, pLocalPlayer, vecLocalView, vecViewAngles, bIsFlipped)
+                local resultTrace = engine.TraceHull(
+                    vecLocalView,
+                    vecLocalView
+                    + Common.VEC_ROT(
+                        self:GetOffset((pLocalPlayer:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, bIsFlipped),
+                        vecViewAngles
+                    ),
+                    -Vector3(8, 8, 8),
+                    Vector3(8, 8, 8),
+                    G.Constants.MASK_PLAYERSOLID
+                )
+                return (not resultTrace.startsolid) and resultTrace.endpos or nil
+            end,
+
+        GetVelocity = (not tbl.GetVelocity) and function(self, ...)
+            return self.m_vecVelocity
+        end or tbl.GetVelocity,
+
+        GetAngularVelocity = (not tbl.GetAngularVelocity) and function(self, ...)
+            return self.m_vecAngularVelocity
+        end or tbl.GetAngularVelocity,
+
+        GetGravity = (not tbl.GetGravity) and function(self, ...)
+            return self.m_flGravity
+        end or tbl.GetGravity,
+    }
+end
+
+local function DefineBasicProjectileDefinition(tbl)
+    local stReturned = DefineProjectileDefinition(tbl)
+    stReturned.m_iType = PROJECTILE_TYPE_BASIC
+    return stReturned
+end
+
+local function DefinePseudoProjectileDefinition(tbl)
+    local stReturned = DefineProjectileDefinition(tbl)
+    stReturned.m_iType = PROJECTILE_TYPE_PSEUDO
+    return stReturned
+end
+
+local function DefineSimulProjectileDefinition(tbl)
+    local stReturned = DefineProjectileDefinition(tbl)
+    stReturned.m_iType = PROJECTILE_TYPE_SIMUL
+    return stReturned
+end
+
+local function DefineDerivedProjectileDefinition(def, tbl)
+    local stReturned = {}
+    for k, v in pairs(def) do
+        stReturned[k] = v
+    end
+    for k, v in pairs(tbl) do
+        stReturned[((type(v) ~= "function") and "m_" or "") .. k] = v
+    end
+
+    if not tbl.GetOffset and tbl.vecOffset then
+        stReturned.GetOffset = function(self, bDucking, bIsFlipped)
+            return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
+                or self.m_vecOffset
+        end
+    end
+
+    if not tbl.GetVelocity and tbl.vecVelocity then
+        stReturned.GetVelocity = function(self, ...)
+            return self.m_vecVelocity
+        end
+    end
+
+    if not tbl.GetAngularVelocity and tbl.vecAngularVelocity then
+        stReturned.GetAngularVelocity = function(self, ...)
+            return self.m_vecAngularVelocity
+        end
+    end
+
+    if not tbl.GetGravity and tbl.flGravity then
+        stReturned.GetGravity = function(self, ...)
+            return self.m_flGravity
+        end
+    end
+
+    return stReturned
+end
+
+-- Initialize projectile definitions
+local aProjectileInfo = {}
+
+-- Rocket Launcher family
+AppendItemDefinitions(1, 18, 205, 228, 237, 658, 730, 800, 809, 889, 898, 907, 916, 965, 974, 1085, 1104, 15006, 15014,
+    15028, 15043, 15052, 15057, 15081, 15104, 15105, 15129, 15130, 15150)
+aProjectileInfo[1] = DefineBasicProjectileDefinition({
+    vecVelocity = Vector3(1100, 0, 0),
+    vecMaxs = Vector3(0, 0, 0),
+    iAlignDistance = 2000,
+    GetOffset = function(self, bDucking, bIsFlipped)
+        return Vector3(23.5, 12 * (bIsFlipped and -1 or 1), bDucking and 8 or -3)
+    end,
+})
+
+-- Direct Hit
+AppendItemDefinitions(2, 127)
+aProjectileInfo[2] = DefineDerivedProjectileDefinition(aProjectileInfo[1], {
+    vecVelocity = Vector3(2000, 0, 0),
+})
+
+-- Liberty Launcher
+AppendItemDefinitions(3, 414)
+aProjectileInfo[3] = DefineDerivedProjectileDefinition(aProjectileInfo[1], {
+    vecVelocity = Vector3(1550, 0, 0),
+})
+
+-- The Original
+AppendItemDefinitions(4, 513)
+aProjectileInfo[4] = DefineDerivedProjectileDefinition(aProjectileInfo[1], {
+    GetOffset = function(self, bDucking)
+        return Vector3(23.5, 0, bDucking and 8 or -3)
+    end,
+})
+
+-- Dragon's Fury
+AppendItemDefinitions(5, 1178)
+aProjectileInfo[5] = DefineBasicProjectileDefinition({
+    vecVelocity = Vector3(600, 0, 0),
+    vecMaxs = Vector3(1, 1, 1),
+    GetOffset = function(self, bDucking, bIsFlipped)
+        return Vector3(3, 7, -9)
+    end,
+})
+
+-- Stickybomb Launcher family
+AppendItemDefinitions(7, 20, 207, 661, 797, 806, 886, 895, 904, 913, 962, 971, 15009, 15012, 15024, 15038, 15045, 15048,
+    15082, 15083, 15084, 15113, 15137, 15138, 15155)
+aProjectileInfo[7] = DefineSimulProjectileDefinition({
+    vecOffset = Vector3(16, 8, -6),
+    vecAngularVelocity = Vector3(600, 0, 0),
+    vecMaxs = Vector3(2, 2, 2),
+    sModelName = "models/weapons/w_models/w_stickybomb.mdl",
+    GetVelocity = function(self, flChargeBeginTime)
+        return Vector3(900 + Common.CLAMP(flChargeBeginTime / 4, 0, 1) * 1500, 0, 200)
+    end,
+})
+
+-- Grenade Launcher family
+AppendItemDefinitions(10, 19, 206, 1007, 1151, 15077, 15079, 15091, 15092, 15116, 15117, 15142, 15158)
+aProjectileInfo[10] = DefinePseudoProjectileDefinition({
+    vecOffset = Vector3(16, 8, -6),
+    vecVelocity = Vector3(1200, 0, 200),
+    vecMaxs = Vector3(2, 2, 2),
+    flGravity = 1,
+    flDrag = 0.45,
+})
+
+-- Huntsman
+AppendItemDefinitions(13, 56, 1005, 1092)
+aProjectileInfo[13] = DefinePseudoProjectileDefinition({
+    vecOffset = Vector3(23.5, -8, -3),
+    vecMaxs = Vector3(0, 0, 0),
+    iAlignDistance = 2000,
+    GetVelocity = function(self, flChargeBeginTime)
+        return Vector3(1800 + Common.CLAMP(flChargeBeginTime, 0, 1) * 800, 0, 0)
+    end,
+    GetGravity = function(self, flChargeBeginTime)
+        return 0.5 - Common.CLAMP(flChargeBeginTime, 0, 1) * 0.4
+    end,
+})
+
+-- Flare Gun family
+AppendItemDefinitions(14, 39, 595, 740, 1081)
+aProjectileInfo[14] = DefinePseudoProjectileDefinition({
+    vecVelocity = Vector3(2000, 0, 0),
+    vecMaxs = Vector3(0, 0, 0),
+    flGravity = 0.3,
+    iAlignDistance = 2000,
+    GetOffset = function(self, bDucking, bIsFlipped)
+        return Vector3(23.5, 12 * (bIsFlipped and -1 or 1), bDucking and 8 or -3)
+    end,
+})
+
+-- Crossbow
+AppendItemDefinitions(15, 305, 1079)
+aProjectileInfo[15] = DefinePseudoProjectileDefinition({
+    vecOffset = Vector3(23.5, -8, -3),
+    vecVelocity = Vector3(2400, 0, 0),
+    vecMaxs = Vector3(3, 3, 3),
+    flGravity = 0.2,
+    iAlignDistance = 2000,
+})
+
 -- Main function to get projectile data
-function ProjectileData.GetProjectileData(pLocal, weapon)
-    -- Initialize the table to return
-    local projData = {}
-
-    -- Get weapon data
-    local weaponID = weapon:GetWeaponID()
-    local itemDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex") or 0
-    local weaponData = weapon:GetWeaponData() or {}
-    local projectileType = weaponData.projectile or 0
-    local baseSpeed = weaponData.projectileSpeed or 0
-    local gravity = weapon:GetProjectileGravity() or 0
-    local drag = weapon:GetProjectileSpread() or 0
-
-    -- Determine if player is ducking
-    local isDucking = (pLocal:GetPropInt("m_fFlags") & FL_DUCKING) == FL_DUCKING
-
-    -- Get charge time if applicable
-    local chargeTime = GetCurrentChargeTime(weapon)
-
-    -- Initialize default values
-    projData.Offset = Vector3(0, 0, 0)
-    projData.ForwardVelocity = baseSpeed
-    projData.UpwardVelocity = 0
-    projData.CollisionSize = Vector3(0, 0, 0)
-    projData.Gravity = gravity
-    projData.Drag = drag
-    projData.ProjectileType = projectileType
-
-    -- Handle specific projectile types
-    if projectileType == E_ProjectileType.TF_PROJECTILE_BULLET then
-        -- Hitscan weapons
-        return nil  -- Hitscan weapons don't have projectile data
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_ROCKET then
-        -- Rocket Launcher
-        projData.Offset = Vector3(23.5, -8, isDucking and 8 or -3)
-        projData.ForwardVelocity = baseSpeed > 0 and baseSpeed or 1100
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_PIPEBOMB or
-           projectileType == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_REMOTE or
-           projectileType == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_PRACTICE then
-        -- Stickybomb Launcher and practice bombs
-        projData.Offset = OFFSET_TABLE.stickyBomb
-        local chargeFactor = Common.CLAMP(chargeTime / 4, 0, 1)
-        projData.ForwardVelocity = 900 + chargeFactor * 1500
-        projData.UpwardVelocity = 200
-        projData.CollisionSize = COLLISION_SIZE_TABLE.medium
-        projData.Gravity = 400
-        projData.Drag = 0.5
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_SYRINGE then
-        -- Syringe Gun
-        projData.Offset = OFFSET_TABLE.syringeGun
-        projData.ForwardVelocity = 1000
-        projData.Gravity = 120
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_FLARE then
-        -- Flare Gun
-        projData.Offset = OFFSET_TABLE.flareGun
-        projData.ForwardVelocity = 2000
-        projData.Gravity = 120
-        projData.CollisionSize = COLLISION_SIZE_TABLE.none
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_JAR or
-           projectileType == E_ProjectileType.TF_PROJECTILE_JAR_MILK or
-           projectileType == E_ProjectileType.TF_PROJECTILE_FESTIVE_JAR or
-           projectileType == E_ProjectileType.TF_PROJECTILE_BREADMONSTER_JARATE or
-           projectileType == E_ProjectileType.TF_PROJECTILE_BREADMONSTER_MADMILK then
-        -- Jarate / Mad Milk and variants
-        projData.Offset = OFFSET_TABLE.jarate
-        projData.ForwardVelocity = 1000
-        projData.UpwardVelocity = 200
-        projData.Gravity = 450
-        projData.CollisionSize = COLLISION_SIZE_TABLE.large
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_ARROW or
-           projectileType == E_ProjectileType.TF_PROJECTILE_FESTIVE_ARROW then
-        -- Huntsman / Crossbow and festive variants
-        projData.Offset = OFFSET_TABLE.huntsman
-        local chargeFactor = Common.CLAMP(chargeTime, 0, 1)
-        projData.ForwardVelocity = 1800 + chargeFactor * 800
-        projData.Gravity = 200 - chargeFactor * 160
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_FLAME_ROCKET then
-        -- Flamethrower
-        projData.Offset = OFFSET_TABLE.flamethrower
-        projData.ForwardVelocity = 2300
-        projData.Gravity = 0
-        projData.CollisionSize = COLLISION_SIZE_TABLE.none
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_HEALING_BOLT or
-           projectileType == E_ProjectileType.TF_PROJECTILE_FESTIVE_HEALING_BOLT then
-        -- Crusader's Crossbow and festive variant
-        projData.Offset = OFFSET_TABLE.huntsman
-        projData.ForwardVelocity = 2400
-        projData.Gravity = 80
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_ENERGY_BALL then
-        -- Cow Mangler / Righteous Bison
-        projData.Offset = OFFSET_TABLE.energyBall
-        projData.ForwardVelocity = 1200
-        projData.Gravity = 0
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_CLEAVER then
-        -- Flying Guillotine
-        projData.Offset = OFFSET_TABLE.flareGun
-        projData.ForwardVelocity = 3000
-        projData.UpwardVelocity = 300
-        projData.Gravity = 900
-        projData.CollisionSize = COLLISION_SIZE_TABLE.medium
-        projData.Drag = 1.3
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_STICKY_BALL then
-        -- Wrap Assassin Ball
-        projData.Offset = OFFSET_TABLE.stickyBomb
-        projData.ForwardVelocity = 2000
-        projData.Gravity = 1000
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_CANNONBALL then
-        -- Loose Cannon
-        projData.Offset = OFFSET_TABLE.stickyBomb
-        projData.ForwardVelocity = 1453  -- Based on game data
-        projData.UpwardVelocity = 200
-        projData.CollisionSize = COLLISION_SIZE_TABLE.medium
-        projData.Gravity = 560
-        projData.Drag = 0.5
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_BUILDING_REPAIR_BOLT then
-        -- Rescue Ranger Bolt
-        projData.Offset = OFFSET_TABLE.huntsman
-        projData.ForwardVelocity = 2400
-        projData.Gravity = 0
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_THROWABLE then
-        -- Throwable items like Gas Passer
-        projData.Offset = OFFSET_TABLE.throwable
-        projData.ForwardVelocity = 1000
-        projData.UpwardVelocity = 200
-        projData.Gravity = 450
-        projData.CollisionSize = COLLISION_SIZE_TABLE.large
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_SPELL then
-        -- Spells from Halloween events
-        projData.Offset = OFFSET_TABLE.throwable
-        projData.ForwardVelocity = 1200
-        projData.Gravity = 400
-        projData.CollisionSize = COLLISION_SIZE_TABLE.medium
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_GRAPPLINGHOOK then
-        -- Grappling Hook
-        projData.Offset = OFFSET_TABLE.grapplingHook
-        projData.ForwardVelocity = 3000
-        projData.Gravity = 0
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_SENTRY_ROCKET then
-        -- Sentry Rocket
-        projData.Offset = OFFSET_TABLE.rocketLauncher
-        projData.ForwardVelocity = 1100
-        projData.CollisionSize = COLLISION_SIZE_TABLE.small
-
-    elseif projectileType == E_ProjectileType.TF_PROJECTILE_BREAD_MONSTER then
-        -- Bread Monster
-        projData.Offset = OFFSET_TABLE.throwable
-        projData.ForwardVelocity = 1000
-        projData.Gravity = 400
-        projData.CollisionSize = COLLISION_SIZE_TABLE.medium
-
-    -- Add any additional projectile types here as needed
-
-    else
-        -- Handle unknown or unsupported projectile types
+function ProjectileData.GetProjectileData(player, weapon)
+    if not player or not weapon then
         return nil
     end
 
-    -- Return the projectile data table
-    return projData
+    local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
+    local projectileType = aItemDefinitions[weaponDefIndex]
+
+    if not projectileType or not aProjectileInfo[projectileType] then
+        return nil
+    end
+
+    local projInfo = aProjectileInfo[projectileType]
+    local chargeBeginTime = weapon:GetPropFloat("PipebombLauncherLocalData", "m_flChargeBeginTime") or 0
+
+    if chargeBeginTime > 0 then
+        chargeBeginTime = globals.CurTime() - chargeBeginTime
+    end
+
+    return {
+        Type = projInfo.m_iType,
+        Speed = projInfo:GetVelocity(chargeBeginTime).x,
+        Gravity = projInfo:GetGravity(chargeBeginTime),
+        Drag = projInfo.m_flDrag,
+        Offset = projInfo:GetOffset((player:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, weapon:IsViewModelFlipped()),
+        Mins = projInfo.m_vecMins,
+        Maxs = projInfo.m_vecMaxs,
+        ModelName = projInfo.m_sModelName,
+        ProjectileInfo = projInfo,
+        ChargeTime = chargeBeginTime,
+    }
 end
 
 return ProjectileData

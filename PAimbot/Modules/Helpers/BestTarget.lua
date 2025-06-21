@@ -2,6 +2,7 @@ local BestTarget = {}
 
 local Common = require("PAimbot.Common")
 local Config = require("PAimbot.Config")
+local FastPlayers = require("PAimbot.Modules.Helpers.FastPlayers")
 
 local G = require("PAimbot.Globals")
 local eyeOffset = Vector3(0, 0, 75)
@@ -57,18 +58,23 @@ end
 
 -- Main function to find the best target (backward compatible)
 function BestTarget.Get()
-    local me = entities.GetLocalPlayer()
-    local players = entities.FindByClass("CTFPlayer")
+    local me = FastPlayers.GetLocal()
+    if not me then return nil end
+
+    local players = FastPlayers.GetEnemies()
     local bestTarget = nil
     local bestFactor = 0
     local localPlayerOrigin = me:GetAbsOrigin()
     local localPlayerViewAngles = engine.GetViewAngles()
 
     for _, player in pairs(players) do
-        if IsValidTarget(me, player) then
-            local factor = CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewAngles)
+        -- Use the WrappedPlayer instances directly, convert to raw entity only when needed
+        local meRaw = me._rawEntity
+        local playerRaw = player._rawEntity
+        if IsValidTarget(meRaw, playerRaw) then
+            local factor = CalculateTargetFactor(playerRaw, localPlayerOrigin, localPlayerViewAngles)
             if factor > bestFactor then
-                bestTarget = player
+                bestTarget = playerRaw
                 bestFactor = factor
             end
         end
@@ -80,15 +86,16 @@ end
 
 -- Function to find the top 3 best targets for history update
 function BestTarget.UpdateHistory(me)
-    local players = entities.FindByClass("CTFPlayer")
+    local players = FastPlayers.GetEnemies()
     local localPlayerOrigin = me:GetAbsOrigin()
     local topTargets = {}
 
     -- Iterate through all players to determine valid targets
     for _, player in pairs(players) do
-        if IsValidTarget(me, player) then
-            local factor = CalculateTargetFactor(player, localPlayerOrigin, engine.GetViewAngles())
-            table.insert(topTargets, { player = player, factor = factor })
+        local playerRaw = player._rawEntity
+        if IsValidTarget(me, playerRaw) then
+            local factor = CalculateTargetFactor(playerRaw, localPlayerOrigin, engine.GetViewAngles())
+            table.insert(topTargets, { player = playerRaw, factor = factor })
         end
     end
 
@@ -123,8 +130,9 @@ function BestTarget.UpdateHistory(me)
 
     -- Clear history for any player not in the top 3
     for _, player in pairs(players) do
-        if not TableContains(topPlayers, player:GetIndex()) then
-            HistoryHandler:clearHistory(player)
+        local playerRaw = player._rawEntity
+        if not TableContains(topPlayers, playerRaw:GetIndex()) then
+            HistoryHandler:clearHistory(playerRaw)
         end
     end
 
