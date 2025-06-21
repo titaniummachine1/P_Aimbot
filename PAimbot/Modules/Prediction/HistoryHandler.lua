@@ -9,9 +9,9 @@ local Config = require("PAimbot.Config")
 -- Kalman Filter Configuration
 --------------------------------------------------------------------------------
 HistoryHandler.kalmanConfig = {
-    processNoise = 0.7,              -- Base process noise (Q)
-    baseMeasurementNoise = 0.05,   -- Base measurement noise (R)
-    minimumHistoryCount = 4,       -- Minimum sample count for dynamic noise computation
+    processNoise = 0.7,          -- Base process noise (Q)
+    baseMeasurementNoise = 0.05, -- Base measurement noise (R)
+    minimumHistoryCount = 4,     -- Minimum sample count for dynamic noise computation
 }
 
 --------------------------------------------------------------------------------
@@ -21,18 +21,18 @@ function HistoryHandler:init()
     -- Table to store raw strafe delta samples per entity:
     -- histories[entityIndex] = { {strafeDelta = value}, ... }
     self.histories = {}
-    
+
     -- For computing the difference between successive velocity angles.
     self.lastVelocities = {} -- last recorded angle for each entity
-    
+
     -- (Optional) Last delta value (if needed for further computations)
-    self.lastDelta = {} 
+    self.lastDelta = {}
 
     -- Maximum number of history samples to store per entity.
     self.maxHistoryTicks = Config.advanced.HistoryTicks or 4
 
     -- Table of Kalman filters for smoothing each entity’s strafe delta.
-    self.kalmanFiltersDelta = {} 
+    self.kalmanFiltersDelta = {}
 
     -- Clear the global history table.
     G.history = {}
@@ -42,8 +42,8 @@ end
 -- Compute sample standard deviation of strafeDelta from a history table.
 --------------------------------------------------------------------------------
 local function computeStdDev(history)
-    if not history or #history < 2 then 
-        return nil 
+    if not history or #history < 2 then
+        return nil
     end
 
     local sum = 0
@@ -107,11 +107,11 @@ function HistoryHandler:kalmanUpdateDelta(entityIndex, measurement)
     local filter = self.kalmanFiltersDelta[entityIndex]
     if not filter then
         filter = {
-            x = measurement,        -- initial state
-            p = 1,                  -- initial error covariance
-            q = self.kalmanConfig.processNoise,  -- process noise (will be updated dynamically)
+            x = measurement,                            -- initial state
+            p = 1,                                      -- initial error covariance
+            q = self.kalmanConfig.processNoise,         -- process noise (will be updated dynamically)
             r = self.kalmanConfig.baseMeasurementNoise, -- measurement noise (updated dynamically)
-            k = 0,                  -- Kalman gain (to be computed)
+            k = 0,                                      -- Kalman gain (to be computed)
         }
         self.kalmanFiltersDelta[entityIndex] = filter
     end

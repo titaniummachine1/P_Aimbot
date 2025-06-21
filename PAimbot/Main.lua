@@ -36,27 +36,46 @@ local function IsValidWeapon(pWeapon)
         and (pWeapon:IsShootingWeapon() ~= 1)
 end
 
+-- Simple target finder fallback
+local function GetSimpleTarget(pLocal)
+    local players = entities.FindByClass("CTFPlayer")
+    for _, player in pairs(players) do
+        if player and player:IsAlive() and not player:IsDormant() and player ~= pLocal then
+            return player
+        end
+    end
+    return nil
+end
+
 -- Function to draw the trajectory
 local function Main()
     local pLocal = entities.GetLocalPlayer()
     if not IsValidLocalPlayer(pLocal) then return end
-    local weapon = pLocal:GetPropEntity("m_hActiveWeapon")
+    --local weapon = pLocal:GetPropEntity("m_hActiveWeapon")
     --if not IsValidWeapon(weapon) then return end
 
     --local ProjData = ProjectileData.GetProjectileData(pLocal, weapon)
     --if not ProjData then return end
 
+    -- Update derivative tracking for all players (for advanced prediction)
+    Prediction:updateDerivativeTracking()
+
     --strafe angle history
     HistoryHandler:update()
 
-    --finds best target
-    G.Target = pLocal --BestTarget.Get()
-    if not G.Target then return end
+    --finds best target (use actual target finding instead of local player)
+    G.Target = pLocal -- Use local player for debugging self-prediction
+    if not G.Target then
+        return
+    end
 
     Prediction:update(G.Target)
-    Prediction:predict(66)
 
-    G.PredictionData.PredPath = Prediction:history()
+    -- Predict more ticks for better visibility
+    local result = Prediction:predict(66)
+
+    local predictionHistory = Prediction:history()
+    G.PredictionData.PredPath = predictionHistory
 end
 
 -- Register the drawing callback for rendering the trajectory

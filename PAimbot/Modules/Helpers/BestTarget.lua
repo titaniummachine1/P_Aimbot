@@ -18,10 +18,16 @@ end
 
 -- Checks if a player should be considered as a valid target
 local function IsValidTarget(me, player)
+    -- Check if gui.GetValue exists and is callable, otherwise default to 0
+    local ignoreCloaked = 0
+    if gui and gui.GetValue and type(gui.GetValue) == "function" then
+        ignoreCloaked = gui.GetValue("ignore cloaked") or 0
+    end
+
     return player and player:IsAlive()
         and not player:IsDormant()
         and player ~= me
-        and (gui.GetValue("ignore cloaked") == 0 or not player:InCond(4))
+        and (ignoreCloaked == 0 or not player:InCond(4))
 end
 
 -- Logarithmic scaling for distance
