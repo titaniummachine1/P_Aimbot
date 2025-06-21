@@ -53,44 +53,51 @@ local function GetSimpleTarget(pLocal)
     return nil
 end
 
--- Function to draw the trajectory
+-- Minimal history update (run only when needed)
+local lastHistoryUpdate = 0
 local function Main()
-    local pLocal = FastPlayers.GetLocal()
-    if not pLocal or not pLocal:IsAlive() or pLocal:InCond(7) then return end
-
-    local weaponEntity = pLocal._rawEntity:GetPropEntity("m_hActiveWeapon")
-    if not IsValidWeapon(weaponEntity) then return end
-
-    local ProjData = ProjectileData.GetProjectileData(pLocal._rawEntity, weaponEntity)
-    if not ProjData then return end
-
-    -- Update derivative tracking for all players (for advanced prediction)
-    Prediction:updateDerivativeTracking()
-
-    --strafe angle history
-    HistoryHandler:update()
-
-    --finds best target (use actual target finding instead of local player)
-    G.Target = BestTarget.Get() -- Use proper target finding
-    if not G.Target then
+    -- Only run if aimbot is enabled to save performance
+    if not Config.main.enable then
         return
     end
 
-    Prediction:update(G.Target)
+    local pLocal = FastPlayers.GetLocal()
+    if not pLocal or not pLocal:IsAlive() or pLocal:InCond(7) then return end
 
-    -- Predict more ticks for better visibility
-    local result = Prediction:predict(Config.advanced.predTicks or 66)
+    -- Only update history every 5 ticks to reduce overhead significantly
+    local currentTick = globals.TickCount()
+    if currentTick - lastHistoryUpdate < 5 then
+        return
+    end
+    lastHistoryUpdate = currentTick
 
-    local predictionHistory = Prediction:history()
-    G.PredictionData.PredPath = predictionHistory
+    -- Minimal updates only when aiming
+    if input.IsButtonDown(Config.main.aimKey.key) then
+        HistoryHandler:update()
+
+        -- Only update prediction for current target if one exists
+        if G.Target then
+            Prediction:update(G.Target)
+        end
+    end
 end
 
 -- Main aimbot function for CreateMove
 local function OnCreateMove(userCmd)
-    -- Only run aimbot if enabled
-    if not Config.main.enable then
+    -- Only run aimbot if enabled and key is pressed
+    if not Config.main.enable or not input.IsButtonDown(Config.main.aimKey.key) then
         return
     end
+
+    local me = entities.GetLocalPlayer()
+    if not me or not me:IsAlive() then return end
+
+    local weapon = me:GetPropEntity("m_hActiveWeapon")
+    if not weapon then return end
+
+    -- Check if weapon is projectile-based
+    local projType = weapon:GetWeaponProjectileType()
+    if not projType or projType <= 1 then return end
 
     -- Run the aimbot
     ProjectileAimbot.Run(userCmd)

@@ -102,8 +102,10 @@ local function DrawMenu()
             end
         end
 
-        -- Advanced Tab
+        -- Advanced Tab with Sectors
         if Config.menu.tabs.advanced then
+            -- Left Sector
+            TimMenu.BeginSector("Prediction Settings")
             Config.advanced.strafePrediction = TimMenu.Checkbox("Strafe Prediction", Config.advanced.strafePrediction)
             TimMenu.NextLine()
 
@@ -123,7 +125,10 @@ local function DrawMenu()
 
             Config.advanced.predTicks = TimMenu.Slider("Prediction Ticks", Config.advanced.predTicks, 1, 200, 1)
             TimMenu.NextLine()
+            TimMenu.EndSector()
 
+            -- Right Sector
+            TimMenu.BeginSector("Performance Settings")
             Config.advanced.hitchanceAccuracy = TimMenu.Slider("Hit Chance Accuracy", Config.advanced.hitchanceAccuracy,
                 1, Config.advanced.predTicks, 1)
             TimMenu.NextLine()
@@ -135,7 +140,15 @@ local function DrawMenu()
                 .projectileSegments, 3, 50, 1)
             TimMenu.NextLine()
 
-            Config.advanced.debugInfo = TimMenu.Checkbox("Debug Info", Config.advanced.debugInfo)
+            Config.advanced.maxPredictionTicks = TimMenu.Slider("Max Prediction Ticks",
+                Config.advanced.maxPredictionTicks or 132, 10, 300, 1)
+            TimMenu.NextLine()
+
+            Config.advanced.maxTargetsToPredict = TimMenu.Slider("Max Targets to Predict",
+                Config.advanced.maxTargetsToPredict or 4, 1, 8, 1)
+            TimMenu.NextLine()
+            TimMenu.EndSector()
+
             TimMenu.NextLine()
         end
 
@@ -221,32 +234,7 @@ local function DrawMenu()
             end
         end
 
-        -- Debug information display
-        if Config.advanced.debugInfo then
-            TimMenu.Separator()
-            TimMenu.NextLine()
 
-            TimMenu.Text("=== Debug Info ===")
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Target: %s", G.Aimbot.Target and G.Aimbot.Target:GetName() or "None"))
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Hit Chance: %.1f%%", G.Aimbot.HitChance))
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Latency: %.2fms", G.Aimbot.LatencyData.latency * 1000))
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Lerp: %.2fms", G.Aimbot.LatencyData.lerp * 1000))
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Prediction Path Points: %d", #G.Aimbot.TargetPredictionPath))
-            TimMenu.NextLine()
-
-            TimMenu.Text(string.format("Projectile Path Points: %d", #G.ProjectileSimulation.TrajectoryPath))
-            TimMenu.NextLine()
-        end
 
         TimMenu.End()
     end

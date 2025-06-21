@@ -140,4 +140,38 @@ function BestTarget.UpdateHistory(me)
     return topPlayers
 end
 
+-- Function to get top N best targets (for optimized prediction)
+function BestTarget.GetTopTargets(maxTargets)
+    local me = FastPlayers.GetLocal()
+    if not me then return {} end
+
+    local players = FastPlayers.GetEnemies()
+    local targets = {}
+    local localPlayerOrigin = me:GetAbsOrigin()
+    local localPlayerViewAngles = engine.GetViewAngles()
+
+    for _, player in pairs(players) do
+        -- Use the WrappedPlayer instances directly, convert to raw entity only when needed
+        local meRaw = me._rawEntity
+        local playerRaw = player._rawEntity
+        if IsValidTarget(meRaw, playerRaw) then
+            local factor = CalculateTargetFactor(playerRaw, localPlayerOrigin, localPlayerViewAngles)
+            if factor > 0 then
+                table.insert(targets, { player = playerRaw, factor = factor })
+            end
+        end
+    end
+
+    -- Sort targets by factor (best first)
+    table.sort(targets, function(a, b) return a.factor > b.factor end)
+
+    -- Return only the top N targets
+    local topTargets = {}
+    for i = 1, math.min(maxTargets, #targets) do
+        table.insert(topTargets, targets[i].player)
+    end
+
+    return topTargets
+end
+
 return BestTarget
