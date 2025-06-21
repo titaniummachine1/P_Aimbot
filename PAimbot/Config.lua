@@ -13,9 +13,9 @@ local Hitbox = {
 -- Default configuration table.
 -- (Keys are in lower-case for easier access, e.g. Config.main.enable)
 local defaultConfig = {
-    currentTab = 1,  -- Top-level tab, if needed
+    currentTab = 1,    -- Top-level tab, if needed
     main = {
-        enable = true,  -- Enable flag for the main module
+        enable = true, -- Enable flag for the main module
         aimKey = {
             key = KEY_LSHIFT,
             aimKeyName = "LSHIFT",
@@ -49,7 +49,7 @@ local defaultConfig = {
     visuals = {
         active = true,
         visualizePath = true,
-        path_styles = {"Line", "Alt Line", "Dashed"},
+        path_styles = { "Line", "Alt Line", "Dashed" },
         path_styles_selected = 2,
         visualizeHitchance = true,
         visualizeProjectile = true,
