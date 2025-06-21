@@ -238,12 +238,14 @@ end
 
 -- Clean up records for invalid or dormant players
 local function cleanupDerivativeRecords()
-    local players = entities.FindByClass("CTFPlayer")
+    local FastPlayers = require("PAimbot.Modules.Helpers.FastPlayers")
+    local players = FastPlayers.GetAll()
     local validIndices = {}
 
     for _, player in pairs(players) do
-        if player and player:IsAlive() and not player:IsDormant() then
-            validIndices[player:GetIndex()] = true
+        local playerRaw = player._rawEntity
+        if playerRaw and playerRaw:IsAlive() and not playerRaw:IsDormant() then
+            validIndices[playerRaw:GetIndex()] = true
         end
     end
 
@@ -672,15 +674,13 @@ end
 ---@param self Prediction
 function Prediction:updateDerivativeTracking()
     local currentTime = globals.RealTime()
-    local players = entities.FindByClass("CTFPlayer")
+    local FastPlayers = require("PAimbot.Modules.Helpers.FastPlayers")
+    local players = FastPlayers.GetEnemies()
 
     for _, player in pairs(players) do
-        if player and player:IsAlive() and not player:IsDormant() then
-            -- Only update tracking for enemy players
-            local localPlayer = entities.GetLocalPlayer()
-            if localPlayer and player:GetTeamNumber() ~= localPlayer:GetTeamNumber() then
-                updateAllDerivativeRecords(player, currentTime)
-            end
+        local playerRaw = player._rawEntity
+        if playerRaw and playerRaw:IsAlive() and not playerRaw:IsDormant() then
+            updateAllDerivativeRecords(playerRaw, currentTime)
         end
     end
 

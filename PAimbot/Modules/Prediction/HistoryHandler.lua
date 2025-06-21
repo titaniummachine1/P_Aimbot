@@ -158,11 +158,13 @@ end
 -- Then, smooth the sample using the Kalman filter and save the result globally.
 --------------------------------------------------------------------------------
 function HistoryHandler:update()
-    local players = entities.FindByClass("CTFPlayer")
+    local FastPlayers = require("PAimbot.Modules.Helpers.FastPlayers")
+    local players = FastPlayers.GetAll()
     for _, player in pairs(players) do
-        if self:isValidTarget(player) then
-            local entityIndex = player:GetIndex()
-            local velocity = player:EstimateAbsVelocity()
+        local playerRaw = player._rawEntity
+        if self:isValidTarget(playerRaw) then
+            local entityIndex = playerRaw:GetIndex()
+            local velocity = playerRaw:EstimateAbsVelocity()
 
             -- Initialize last recorded velocity angle if not present.
             if not self.lastVelocities[entityIndex] then

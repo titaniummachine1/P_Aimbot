@@ -9,7 +9,7 @@ local eyeOffset = Vector3(0, 0, 75)
 
 -- Utility function to check if a table contains a specific value
 local function TableContains(tbl, value)
-    for _, v in ipairs(tbl) do
+    for _, v in pairs(tbl) do
         if v == value then
             return true
         end
@@ -57,29 +57,45 @@ local function CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewA
     -- FOV factor (smaller FOV is much better)
     local fovFactor = Common.Math.RemapValClamped(fov, 0, Config.main.aimfov, 1.0, 0.3)
 
-    -- Visibility factor (HEAVILY prioritize visible targets)
+    -- Visibility factor (MASSIVELY prioritize visible targets - 100x penalty for hidden)
     local isVisible = Common.Helpers.VisPos(player, localPlayerOrigin + eyeOffset, playerOrigin + eyeOffset)
-    local visibilityFactor = isVisible and 1.0 or 0.2 -- Drastic shift for non-visible
+    local visibilityFactor = isVisible and 1.0 or 0.01 -- 100x penalty for targets behind walls
 
     -- Health factor (lower health = higher priority)
     local health = player:GetHealth()
     local maxHealth = player:GetMaxHealth()
     local healthFactor = Common.Math.RemapValClamped(health, 0, maxHealth, 1.2, 0.8)
 
-    -- Movement predictability from history (if available)
+    -- Movement predictability from history (if available) - with trust factor scaling
     local predictabilityFactor = 1.0
     local playerIndex = player:GetIndex()
     if G.predictionDelta[playerIndex] and G.predictionDelta[playerIndex].entropy then
         local entropy = G.predictionDelta[playerIndex].entropy
-        predictabilityFactor = 1.0 - (entropy * 0.3) -- Less penalty for unpredictable movement
+        local trustFactor = G.predictionDelta[playerIndex].trustFactor or 0.0
+
+        -- Only apply entropy penalty when we have sufficient trust in the data
+        local entropyPenalty = entropy * (0.2 + trustFactor * 0.3) -- 0.2-0.5 penalty based on trust
+        predictabilityFactor = 1.0 - entropyPenalty
+
+        -- Bonus for high trust factor (reliable data)
+        local trustBonus = trustFactor * 0.15
+        predictabilityFactor = predictabilityFactor + trustBonus
+    end
+
+    -- Hit chance factor (easier targets get slight preference)
+    local hitChanceFactor = 1.0
+    if Config.main.enable then                                                       -- Only calculate hit chance if aimbot is enabled
+        local hitChance = BestTarget.CalculateHitChance(player, 10)                  -- Quick 10-tick prediction
+        hitChanceFactor = Common.Math.RemapValClamped(hitChance, 20, 90, 0.85, 1.15) -- 15% range around 1.0
     end
 
     -- Combine factors with sophisticated weighting
-    local totalFactor = (distanceFactor * 0.25 + -- Distance: 25%
+    local totalFactor = (distanceFactor * 0.22 + -- Distance: 22%
         fovFactor * 0.30 +                       -- FOV: 30%
         visibilityFactor * 0.30 +                -- Visibility: 30%
-        healthFactor * 0.10 +                    -- Health: 10%
-        predictabilityFactor * 0.05)             -- Predictability: 5%
+        healthFactor * 0.08 +                    -- Health: 8%
+        predictabilityFactor * 0.05 +            -- Predictability: 5%
+        hitChanceFactor * 0.05)                  -- Hit Chance: 5% (about 1/6th of FOV as requested)
 
     return totalFactor
 end
@@ -229,21 +245,23 @@ local function CalculateAdvancedEntropy(player)
     }
 end
 
--- Sophisticated hit chance calculation based on movement entropy
+-- Advanced hit chance calculation with trust factor scaling
 function BestTarget.CalculateHitChance(player, predictionTicks)
     local playerIndex = player:GetIndex()
 
-    -- Calculate movement entropy (how unpredictable the player is)
-    local entropy = CalculateMovementEntropy(player)
+    -- Calculate advanced entropy with trust factor
+    local entropyData = CalculateAdvancedEntropy(player)
 
-    -- Store entropy for target selection
+    -- Store entropy data for target selection
     if not G.predictionDelta[playerIndex] then
         G.predictionDelta[playerIndex] = {}
     end
-    G.predictionDelta[playerIndex].entropy = entropy
+    G.predictionDelta[playerIndex].entropy = entropyData.entropy
+    G.predictionDelta[playerIndex].trustFactor = entropyData.trustFactor
+    G.predictionDelta[playerIndex].samples = entropyData.samples
 
-    -- Base hit chance factors
-    local baseHitChance = 80
+    -- Base hit chance - scaled by trust factor
+    local baseHitChance = 60 + (entropyData.trustFactor * 20) -- 60-80 based on trust
 
     -- Distance factor
     local me = entities.GetLocalPlayer()
@@ -254,26 +272,37 @@ function BestTarget.CalculateHitChance(player, predictionTicks)
     local eyeOffset = Vector3(0, 0, 75)
     local isVisible = me and
         Common.Helpers.VisPos(player, me:GetAbsOrigin() + eyeOffset, player:GetAbsOrigin() + eyeOffset)
-    local visibilityBonus = isVisible and 10 or -15
+    local visibilityBonus = isVisible and 15 or -20
 
     -- FOV factor
     if me then
         local angles = Common.Math.PositionAngles(me:GetAbsOrigin(), player:GetAbsOrigin())
         local fov = Common.Math.AngleFov(angles, engine.GetViewAngles())
-        local fovBonus = Common.Math.RemapValClamped(fov, 0, Config.main.aimfov or 60, 10, -5)
+        local fovBonus = Common.Math.RemapValClamped(fov, 0, Config.main.aimfov or 60, 15, -10)
 
-        -- Entropy penalty (higher entropy = more unpredictable = lower hit chance)
-        local entropyPenalty = entropy * 25
+        -- Entropy penalty - scaled by trust factor (more trust = more reliable entropy)
+        local entropyPenalty = entropyData.entropy * (20 + entropyData.trustFactor * 15)
 
         -- Prediction time penalty (longer prediction = less accurate)
-        local predictionPenalty = (predictionTicks or 0) * 0.2
+        local predictionPenalty = (predictionTicks or 0) * 0.15
 
-        local finalHitChance = baseHitChance + distanceFactor + visibilityBonus + fovBonus - entropyPenalty -
-            predictionPenalty
-        return Common.clamp(finalHitChance, 10, 95)
+        -- Trust bonus - reward high sample counts
+        local trustBonus = entropyData.trustFactor * 10
+
+        -- Sample count bonus - immediate benefit from more data
+        local sampleBonus = Common.Math.RemapValClamped(entropyData.samples, 3, 30, 0, 8)
+
+        local finalHitChance = baseHitChance + distanceFactor + visibilityBonus + fovBonus + trustBonus + sampleBonus -
+            entropyPenalty - predictionPenalty
+
+        -- Ensure minimum hit chance scales with trust (low trust = lower minimum)
+        local minHitChance = 5 + (entropyData.trustFactor * 15) -- 5-20 based on trust
+        local maxHitChance = 95
+
+        return Common.clamp(finalHitChance, minHitChance, maxHitChance)
     end
 
-    return 50 -- Default if no local player
+    return 30 -- Default if no local player
 end
 
 -- Enhanced history update for configurable number of targets (4-8)

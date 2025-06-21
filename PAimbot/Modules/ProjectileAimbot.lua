@@ -27,6 +27,8 @@ local TickInterval = globals.TickInterval
 local TraceLine = engine.TraceLine
 local TraceHull = engine.TraceHull
 
+-- Physics constants (no drag needed for TF2 projectiles)
+
 local function isNaN(x) return x ~= x end
 
 -- Helper function for forward collision (from original working code)
@@ -63,83 +65,205 @@ local function handleGroundCollision(vel, groundTrace)
     return groundTrace.endpos, onGround
 end
 
+-- Find best splash position for hitting hidden targets
+local function FindBestSplashPosition(origin, targetPos, target)
+    local BlastRadius = 150 -- Standard TF2 explosive radius
+    local shouldHitEntity = function(entity)
+        return entity:GetIndex() ~= target:GetIndex() and entity:GetTeamNumber() ~= target:GetTeamNumber()
+    end
+
+    -- Check if direct shot is blocked
+    local directTrace = TraceLine(origin, targetPos, G.Constants.MASK_PLAYERSOLID, shouldHitEntity)
+    if directTrace.fraction > 0.9 then
+        return targetPos -- Direct shot is clear, no need for splash
+    end
+
+    -- Try shooting at nearby surfaces for splash damage
+    local directions = {
+        Vector3(1, 0, 0),  -- Right
+        Vector3(-1, 0, 0), -- Left
+        Vector3(0, 1, 0),  -- Forward
+        Vector3(0, -1, 0), -- Back
+        Vector3(0, 0, -1), -- Down (ground)
+    }
+
+    local bestSplashPos = nil
+    local bestDistance = math.huge
+
+    for _, dir in ipairs(directions) do
+        -- Cast ray from target position outward to find nearby walls/ground
+        local splashTrace = TraceLine(targetPos, targetPos + dir * BlastRadius, G.Constants.MASK_PLAYERSOLID,
+            shouldHitEntity)
+
+        if splashTrace.fraction < 1.0 then
+            local splashPos = splashTrace.endpos
+            local distanceToTarget = (splashPos - targetPos):Length()
+
+            -- Check if we can shoot at this splash position
+            local shootTrace = TraceLine(origin, splashPos, G.Constants.MASK_PLAYERSOLID, shouldHitEntity)
+
+            -- Valid splash position if:
+            -- 1. We can shoot at it (clear line of sight)
+            -- 2. It's within blast radius of target
+            -- 3. It's closer than previous candidates
+            if shootTrace.fraction > 0.9 and distanceToTarget < BlastRadius and distanceToTarget < bestDistance then
+                bestSplashPos = splashPos
+                bestDistance = distanceToTarget
+            end
+        end
+    end
+
+    return bestSplashPos
+end
+
 -- Solve projectile trajectory (exact copy from working original)
-function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
-    -- Calculate the direction vector from origin to destination
+-- Enhanced projectile simulation with proper collision detection
+local function SimulateProjectileTrajectory(origin, dest, speed, gravity, sv_gravity, target, timeToHit, projData)
     local direction = dest - origin
-
-    -- Calculate squared speed for later use in equations
     local speed_squared = speed * speed
-
-    -- Calculate the effective gravity based on server gravity settings and the specified gravity factor
     local effective_gravity = sv_gravity * gravity
-
-    -- Calculate the horizontal (2D) distance and vertical (Z-axis) distance between origin and destination
     local horizontal_distance = direction:Length2D()
     local vertical_distance = direction.z
 
     -- Entity filter function to avoid hitting the target itself
     local shouldHitEntity = function(entity)
-        return entity:GetIndex() ~= target:GetIndex() or entity:GetTeamNumber() ~= target:GetTeamNumber()
+        return entity:GetIndex() ~= target:GetIndex() and entity:GetTeamNumber() ~= target:GetTeamNumber()
     end
 
-    -- Case for when there is no gravity (e.g., hitscan projectiles)
+    -- Calculate projectile hull size based on weapon type
+    local projMins, projMaxs = projData.Mins or Vector3(-1, -1, -1), projData.Maxs or Vector3(1, 1, 1)
+
+    -- Case for hitscan/no gravity projectiles (rockets, energy weapons)
     if effective_gravity == 0 then
-        -- Calculate the time to hit based on speed and distance
         local time_to_target = direction:Length() / speed
         if time_to_target > timeToHit then
-            return false -- Projectile will fly out of range, so return false
+            return false
         end
 
-        -- Perform a trace line to check if the path is clear
-        local trace = TraceLine(origin, dest, G.Constants.MASK_PLAYERSOLID)
-        if trace.fraction ~= 1.0 and trace.entity:GetName() ~= target:GetName() then
-            return false -- Path is obstructed, so return false
+        -- Simple TraceLine collision detection - if nil then hit target, if wall then blocked
+        local trace = TraceLine(origin, dest, G.Constants.MASK_PLAYERSOLID, shouldHitEntity)
+
+        -- Check collision result
+        if trace.fraction < 1.0 then
+            if trace.entity and trace.entity:GetIndex() == target:GetIndex() then
+                -- We hit our target faster than anticipated - success!
+                G.ProjectileSimulation.currentPath = { origin, trace.endpos }
+                return {
+                    angles = Common.Math.PositionAngles(origin, dest),
+                    time = time_to_target * trace.fraction, -- Adjust time for early hit
+                    Prediction = dest,
+                    Positions = { origin, dest }
+                }
+            else
+                -- We hit a wall or obstacle - path blocked
+                return false
+            end
         end
 
-        -- Return the result with no gravity calculations
+        G.ProjectileSimulation.currentPath = { origin, dest }
         return {
-            angles = Common.PositionAngles(origin, dest),
+            angles = Common.Math.PositionAngles(origin, dest),
             time = time_to_target,
             Prediction = dest,
             Positions = { origin, dest }
         }
     else
-        -- Ballistic arc calculation when gravity is present
-
-        -- Calculate the term related to gravity and horizontal distance squared
+        -- Ballistic trajectory calculation with proper physics simulation
         local gravity_horizontal_squared = effective_gravity * horizontal_distance * horizontal_distance
-
-        -- Solve the quadratic equation for projectile motion
         local discriminant = speed_squared * speed_squared -
             effective_gravity * (gravity_horizontal_squared + 2 * vertical_distance * speed_squared)
-        if discriminant < 0 then return nil end -- No real solution, so return nil
 
-        -- Calculate the pitch and yaw angles required for the projectile to reach the target
+        if discriminant < 0 then return nil end
+
         local sqrt_discriminant = math.sqrt(discriminant)
         local pitch_angle = math.atan((speed_squared - sqrt_discriminant) / (effective_gravity * horizontal_distance))
         local yaw_angle = math.atan(direction.y, direction.x)
 
         if isNaN(pitch_angle) or isNaN(yaw_angle) then return nil end
 
-        -- Convert the pitch and yaw into Euler angles
         local calculated_angles = EulerAngles(pitch_angle * -M_RADPI, yaw_angle * M_RADPI)
-
-        -- Calculate the time it takes for the projectile to reach the target
         local time_to_target = horizontal_distance / (math.cos(pitch_angle) * speed)
 
         if time_to_target > timeToHit then
-            return false -- Projectile will fly out of range, so return false
+            return false
         end
 
-        -- Return the calculated angles, time to target, final predicted position, and all positions along the path
+        -- Enhanced trajectory simulation with proper collision detection
+        local number_of_segments = math.max(10, Config.advanced.projectileSegments or 20)
+        local segment_duration = time_to_target / number_of_segments
+        local current_position = origin
+        local velocity_vector = Vector3(
+            speed * math.cos(pitch_angle) * math.cos(yaw_angle),
+            speed * math.cos(pitch_angle) * math.sin(yaw_angle),
+            speed * math.sin(pitch_angle)
+        )
+
+        G.ProjectileSimulation.currentPath = { current_position }
+
+        -- Simulate each segment of the trajectory
+        for segment = 1, number_of_segments do
+            local time_step = segment_duration
+
+            -- Calculate new position using physics equations
+            local displacement = velocity_vector * time_step
+            local gravity_displacement = Vector3(0, 0, -0.5 * effective_gravity * time_step * time_step)
+            local new_position = current_position + displacement + gravity_displacement
+
+            -- No drag for TF2 projectiles - they maintain constant velocity
+
+            -- Apply gravity to velocity
+            velocity_vector.z = velocity_vector.z - effective_gravity * time_step
+
+            -- Simple TraceLine collision detection for each segment
+            local trace = TraceLine(current_position, new_position, G.Constants.MASK_PLAYERSOLID, shouldHitEntity)
+
+            -- Update position to collision point if we hit something
+            if trace.fraction < 1.0 then
+                new_position = trace.endpos
+                table.insert(G.ProjectileSimulation.currentPath, new_position)
+
+                -- Check what we hit
+                if trace.entity and trace.entity:GetIndex() == target:GetIndex() then
+                    -- We hit our target - success!
+                    return {
+                        angles = calculated_angles,
+                        time = segment * segment_duration * trace.fraction,
+                        Prediction = new_position,
+                        Positions = G.ProjectileSimulation.currentPath
+                    }
+                else
+                    -- We hit something else (wall, ground, etc.) - trajectory blocked
+                    return false
+                end
+            end
+
+            -- Add position to path and continue
+            table.insert(G.ProjectileSimulation.currentPath, new_position)
+            current_position = new_position
+        end
+
+        -- If we completed the full trajectory without hitting anything
         return {
             angles = calculated_angles,
             time = time_to_target,
-            Prediction = dest,
-            Positions = { origin, dest }
+            Prediction = current_position,
+            Positions = G.ProjectileSimulation.currentPath
         }
     end
+end
+
+function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
+    -- Get projectile data for proper collision detection
+    local me = entities.GetLocalPlayer()
+    local weapon = me:GetPropEntity("m_hActiveWeapon")
+    local projData = ProjectileData.GetProjectileData(me, weapon)
+
+    if not projData then
+        -- Fallback to basic simulation if no projectile data
+        projData = { Mins = Vector3(-1, -1, -1), Maxs = Vector3(1, 1, 1) }
+    end
+
+    return SimulateProjectileTrajectory(origin, dest, speed, gravity, sv_gravity, target, timeToHit, projData)
 end
 
 -- Calculate hit chance percentage (from original)
@@ -212,7 +336,15 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
     local vStep = Vector3(0, 0, stepSize / 2)
     local vPath = {}
-    local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), Common.IsOnGround(player)
+    -- Start with lag-compensated real-time position
+    local latency = G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+    local basePos = player:GetAbsOrigin()
+    local baseVel = player:EstimateAbsVelocity()
+
+    -- Compensate for network lag by advancing position to real-time
+    local lastP = basePos + baseVel * latency
+    local lastV = baseVel
+    local lastG = Common.IsOnGround(player)
     local shouldHitEntity = function(entity)
         return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber()
     end
@@ -322,8 +454,24 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
         if solution == nil then goto continue end
 
         if not solution then
-            -- TODO: Add splash prediction here if needed
-            return nil
+            -- Try splash prediction for hidden targets if enabled
+            if Config.advanced.splashPrediction and projData.Gravity == 0 then -- Only for explosive projectiles
+                local splashPos = FindBestSplashPosition(shootPos, pos, player)
+                if splashPos then
+                    solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity, player,
+                        PredTicks * tick_interval)
+                    if solution then
+                        -- Mark this as a splash shot for visuals
+                        G.Aimbot.IsSplashShot = true
+                    end
+                end
+            end
+
+            if not solution then
+                return nil
+            end
+        else
+            G.Aimbot.IsSplashShot = false
         end
 
         local time
@@ -413,7 +561,8 @@ function ProjectileAimbot.Run(userCmd)
     -- Auto shoot
     if Config.main.autoShoot then
         if weapon:GetWeaponID() == TF_WEAPON_COMPOUND_BOW then
-            if weapon:GetChargeBeginTime() > 0 then
+            local chargeBeginTime = weapon:GetPropFloat("PipebombLauncherLocalData", "m_flChargeBeginTime") or 0
+            if chargeBeginTime > 0 then
                 userCmd.buttons = userCmd.buttons & ~IN_ATTACK
             else
                 userCmd.buttons = userCmd.buttons | IN_ATTACK

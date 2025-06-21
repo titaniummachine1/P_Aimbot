@@ -44,10 +44,11 @@ end
 
 -- Simple target finder fallback
 local function GetSimpleTarget(pLocal)
-    local players = entities.FindByClass("CTFPlayer")
+    local players = FastPlayers.GetEnemies()
     for _, player in pairs(players) do
-        if player and player:IsAlive() and not player:IsDormant() and player ~= pLocal then
-            return player
+        local playerRaw = player._rawEntity
+        if playerRaw and playerRaw:IsAlive() and not playerRaw:IsDormant() and playerRaw ~= pLocal then
+            return playerRaw
         end
     end
     return nil
