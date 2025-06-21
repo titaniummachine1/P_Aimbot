@@ -45,6 +45,34 @@ local function shouldHitEntityFun(entity, player)
     return ignoreScore == 0
 end
 
+-- Clamp velocity components per axis (sv_maxvelocity)
+---@param velocity Vector3 The velocity vector to clamp
+---@param maxVel number Maximum velocity per axis
+---@return Vector3 Clamped velocity vector
+local function clampVelocityPerAxis(velocity, maxVel)
+    -- Branchless per-axis clamping
+    local x = velocity.x
+    local y = velocity.y
+    local z = velocity.z
+
+    -- Clamp X axis
+    local xExceeds = (math.abs(x) > maxVel) and 1 or 0
+    local xSign = (x > 0) and 1 or -1
+    x = x * (1 - xExceeds) + (maxVel * xSign * xExceeds)
+
+    -- Clamp Y axis
+    local yExceeds = (math.abs(y) > maxVel) and 1 or 0
+    local ySign = (y > 0) and 1 or -1
+    y = y * (1 - yExceeds) + (maxVel * ySign * yExceeds)
+
+    -- Clamp Z axis
+    local zExceeds = (math.abs(z) > maxVel) and 1 or 0
+    local zSign = (z > 0) and 1 or -1
+    z = z * (1 - zExceeds) + (maxVel * zSign * zExceeds)
+
+    return Vector3(x, y, z)
+end
+
 --------------------------------------------------------------------------------
 -- Prediction State: reset, initialization, and update
 --------------------------------------------------------------------------------
@@ -66,6 +94,7 @@ function Prediction:reset()
     self.MAX_SPEED = nil
     self.shouldHitEntity = nil
     self.terminalVelocity = nil
+    self.maxVelocity = nil
 
     -- Variables for move intent simulation
     self.moveIntent = nil        -- Current intended movement vector
@@ -87,6 +116,9 @@ function Prediction:update(player)
 
     -- TF2 Terminal Velocity (based on fall damage plateau at ~3500 HU/s)
     self.terminalVelocity = -3500 -- Negative because downward
+
+    -- TF2 Maximum Velocity per axis (sv_maxvelocity)
+    self.maxVelocity = client.GetConVar("sv_maxvelocity") or 3500
 
     -- Set up hitbox dimensions based on player state
     G.Hitbox.Max.z = Common.IsOnGround(player) and 62 or 82
@@ -251,6 +283,9 @@ function Prediction:predictTick()
     -- Apply terminal velocity clamping again after ground collision effects
     local exceedsTerminalFinal = (vel.z < self.terminalVelocity) and 1 or 0
     vel.z = vel.z * (1 - exceedsTerminalFinal) + self.terminalVelocity * exceedsTerminalFinal
+
+    -- Apply sv_maxvelocity clamping per axis (hard velocity cap)
+    vel = clampVelocityPerAxis(vel, self.maxVelocity)
 
     -- Cache the simulation results
     self.cachedPredictions.pos[self.currentTick + 1] = pos
