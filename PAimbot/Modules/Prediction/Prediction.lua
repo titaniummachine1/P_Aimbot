@@ -28,19 +28,21 @@ end
 ---@param player Entity The player entity to compare against
 ---@return boolean Whether the entity should be hit by traces
 local function shouldHitEntityFun(entity, player)
-    -- Use logical operators to create a single return statement
-    -- Each condition evaluates to true/false and we return true only if all checks pass
+    -- Branchless entity collision check using mathematical operations
     local entityClass = entity:GetClass()
-    local sameTeam = entity:GetTeamNumber() == player:GetTeamNumber()
+    local isIgnoredClass = ignoreClassLookup[entityClass] and 1 or 0
+    local isSameEntity = (entity == player) and 1 or 0
+    local isSameTeam = (entity:GetTeamNumber() == player:GetTeamNumber()) and 1 or 0
+
     local pos = entity:GetAbsOrigin() + Vector3(0, 0, 1)
     local contents = engine.GetPointContents(pos)
+    local isNotEmpty = (contents ~= CONTENTS_EMPTY) and 1 or 0
 
-    return not (
-        ignoreClassLookup[entityClass] or -- Not in ignore list
-        entity == player or               -- Not the player
-        sameTeam or                       -- Not on same team
-        contents ~= CONTENTS_EMPTY        -- Not in empty space
-    )
+    -- Sum all the "should ignore" conditions - if any are true (sum > 0), we ignore
+    local ignoreScore = isIgnoredClass + isSameEntity + isSameTeam + isNotEmpty
+
+    -- Return true only if ignoreScore is 0 (no ignore conditions met)
+    return ignoreScore == 0
 end
 
 --------------------------------------------------------------------------------
@@ -63,6 +65,7 @@ function Prediction:reset()
     self.hitbox = nil
     self.MAX_SPEED = nil
     self.shouldHitEntity = nil
+    self.terminalVelocity = nil
 
     -- Variables for move intent simulation
     self.moveIntent = nil        -- Current intended movement vector
@@ -81,6 +84,9 @@ function Prediction:update(player)
     self.acceleration = client.GetConVar("sv_accelerate") or 10
     self.friction = client.GetConVar("sv_friction") or 4
     self.stepHeight = player:GetPropFloat("localdata", "m_flStepSize") or 18
+
+    -- TF2 Terminal Velocity (based on fall damage plateau at ~3500 HU/s)
+    self.terminalVelocity = -3500 -- Negative because downward
 
     -- Set up hitbox dimensions based on player state
     G.Hitbox.Max.z = Common.IsOnGround(player) and 62 or 82
@@ -121,41 +127,50 @@ end
 function Prediction:predictTick()
     local dt = G.TickInterval
 
-    -- Apply gravity (vertical component) if airborne
-    if not self.onGround then
-        self.velocity.z = self.velocity.z - self.gravity * dt
-    end
+    -- Branchless gravity application: multiply by (1 - onGround) to apply only when airborne
+    local airborneMultiplier = self.onGround and 0 or 1
+    self.velocity.z = self.velocity.z - self.gravity * dt * airborneMultiplier
 
-    -- Rotate the move intent by the current strafe input
-    if self.deltaStrafe then
-        self.moveIntent = Common.RotateVector(self.moveIntent, self.deltaStrafe)
-    end
+    -- Apply terminal velocity clamping (branchless)
+    -- Only clamp if velocity is more negative than terminal velocity
+    local exceedsTerminal = (self.velocity.z < self.terminalVelocity) and 1 or 0
+    self.velocity.z = self.velocity.z * (1 - exceedsTerminal) + self.terminalVelocity * exceedsTerminal
+
+    -- Rotate the move intent by the current strafe input (branchless - deltaStrafe can be 0)
+    self.moveIntent = Common.RotateVector(self.moveIntent, self.deltaStrafe or 0)
 
     -- Compute the desired horizontal direction from the move intent
     local desiredDir = Common.Normalize(Vector3(self.moveIntent.x, self.moveIntent.y, 0))
     local desiredSpeed = self.MAX_SPEED -- Full input implies full speed
 
-    -- --- Friction: reduce current horizontal speed if on ground
+    -- --- Friction: reduce current horizontal speed if on ground (branchless)
     local currentHorizontal = Vector3(self.velocity.x, self.velocity.y, 0)
     local currentSpeed = currentHorizontal:Length()
-    if self.onGround and currentSpeed > 0 then
-        local drop = currentSpeed * self.friction * dt
-        local newSpeed = math.max(currentSpeed - drop, 0)
-        currentHorizontal = Common.Normalize(currentHorizontal) * newSpeed
-    end
+
+    -- Branchless friction calculation
+    local groundMultiplier = self.onGround and 1 or 0
+    local speedMultiplier = (currentSpeed > 0) and 1 or 0
+    local drop = currentSpeed * self.friction * dt * groundMultiplier * speedMultiplier
+    local newSpeed = math.max(currentSpeed - drop, 0)
+
+    -- Branchless normalization: if currentSpeed is 0, this becomes (0,0,0) * 0 = (0,0,0)
+    local normalizedCurrent = currentSpeed > 0 and (currentHorizontal / currentSpeed) or Vector3(0, 0, 0)
+    currentHorizontal = normalizedCurrent * newSpeed
 
     -- --- Acceleration: accelerate horizontally toward the desired direction
     local speedAlongWish = currentHorizontal:Dot(desiredDir)
     local addSpeed = desiredSpeed - speedAlongWish
     local accelSpeed = self.acceleration * desiredSpeed * dt
-    if accelSpeed > addSpeed then
-        accelSpeed = addSpeed
-    end
+
+    -- Branchless min: use math.min instead of if-then
+    accelSpeed = math.min(accelSpeed, addSpeed)
+
     currentHorizontal = currentHorizontal + desiredDir * accelSpeed
 
-    if currentHorizontal:Length() > desiredSpeed then
-        currentHorizontal = Common.Normalize(currentHorizontal) * desiredSpeed
-    end
+    -- Branchless speed clamping
+    local currentHorLength = currentHorizontal:Length()
+    local clampMultiplier = math.min(desiredSpeed / math.max(currentHorLength, 0.001), 1)
+    currentHorizontal = currentHorizontal * clampMultiplier
 
     -- Update horizontal velocity; vertical component remains
     self.velocity.x = currentHorizontal.x
@@ -175,24 +190,23 @@ function Prediction:predictTick()
         MASK_PLAYERSOLID,
         self.shouldHitEntity
     )
-    if wallTrace.fraction < 1 then
-        local normal = wallTrace.plane
-        -- In TF2, wall collision only affects velocity, NOT the moveIntent/strafe direction
-        -- The player continues to strafe in their intended direction, but velocity gets clipped along the wall
 
-        -- Clip the velocity along the wall plane (not the desired direction)
-        local dot = vel:Dot(normal)
-        if dot < 0 then -- Only clip if moving into the wall
-            vel = vel - normal * dot
-        end
+    -- Branchless wall collision handling
+    local hitWall = (wallTrace.fraction < 1) and 1 or 0
+    local normal = wallTrace.plane or Vector3(0, 0, 0)
+    local dot = vel:Dot(normal)
 
-        -- Update position to the collision point
-        pos.x, pos.y = wallTrace.endpos.x, wallTrace.endpos.y
+    -- Only clip if moving into the wall (dot < 0) and we hit a wall
+    local clipMultiplier = ((dot < 0) and hitWall == 1) and 1 or 0
+    vel = vel - normal * (dot * clipMultiplier)
 
-        -- Update the horizontal velocity components after clipping
-        self.velocity.x = vel.x
-        self.velocity.y = vel.y
-    end
+    -- Branchless position update: lerp between original pos and collision point
+    pos.x = pos.x * (1 - hitWall) + wallTrace.endpos.x * hitWall
+    pos.y = pos.y * (1 - hitWall) + wallTrace.endpos.y * hitWall
+
+    -- Update velocity components
+    self.velocity.x = vel.x
+    self.velocity.y = vel.y
 
     -- --- Ground Collision Handling ---
     local downStep = self.onGround and self.vStep or nullVector
@@ -204,30 +218,39 @@ function Prediction:predictTick()
         MASK_PLAYERSOLID,
         self.shouldHitEntity
     )
-    if groundTrace.fraction < 1 then
-        local normal = groundTrace.plane
-        local angle = math.deg(math.acos(normal:Dot(vUp)))
-        if angle < 45 then
-            pos = groundTrace.endpos
-            onGround = true
-        elseif angle < 55 then
-            vel = Vector3(0, 0, 0)
-            onGround = false
-        else
-            local dot = vel:Dot(normal)
-            vel = vel - normal * dot
-            onGround = true
-        end
-        if onGround then
-            vel.z = 0
-        end
-    else
-        onGround = false
-    end
 
-    if not onGround then
-        vel.z = vel.z - self.gravity * dt
-    end
+    -- Branchless ground collision
+    local hitGround = (groundTrace.fraction < 1) and 1 or 0
+    local groundNormal = groundTrace.plane or Vector3(0, 0, 1)
+    local groundAngle = math.deg(math.acos(math.max(0, math.min(1, groundNormal:Dot(vUp)))))
+
+    -- Determine ground state based on angle ranges (branchless)
+    local isWalkable = (groundAngle < 45) and 1 or 0
+    local isSlippery = ((groundAngle >= 45) and (groundAngle < 55)) and 1 or 0
+    local isWall = (groundAngle >= 55) and 1 or 0
+
+    -- Apply ground effects branchlessly
+    pos = pos * (1 - hitGround * isWalkable) + groundTrace.endpos * (hitGround * isWalkable)
+    onGround = (hitGround * isWalkable == 1) or (hitGround * isWall == 1)
+
+    -- Handle slippery surfaces (stop all movement)
+    vel = vel * (1 - hitGround * isSlippery)
+
+    -- Handle wall surfaces (clip velocity)
+    local wallDot = vel:Dot(groundNormal)
+    vel = vel - groundNormal * (wallDot * hitGround * isWall)
+
+    -- Zero vertical velocity if on ground
+    local groundVelMultiplier = onGround and 0 or 1
+    vel.z = vel.z * groundVelMultiplier
+
+    -- Apply gravity again if not on ground (was already applied at start for airborne)
+    local finalAirborneMultiplier = onGround and 0 or 1
+    vel.z = vel.z - self.gravity * dt * finalAirborneMultiplier
+
+    -- Apply terminal velocity clamping again after ground collision effects
+    local exceedsTerminalFinal = (vel.z < self.terminalVelocity) and 1 or 0
+    vel.z = vel.z * (1 - exceedsTerminalFinal) + self.terminalVelocity * exceedsTerminalFinal
 
     -- Cache the simulation results
     self.cachedPredictions.pos[self.currentTick + 1] = pos
