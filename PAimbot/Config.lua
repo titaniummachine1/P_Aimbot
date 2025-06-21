@@ -45,6 +45,7 @@ local defaultConfig = {
         projectileSegments = 10,
         maxPredictionTicks = 132,
         maxTargetsToPredict = 4,
+        maxTrackedTargets = 8, -- Number of targets to track for history/entropy (4-8)
         aimModes = {
             leading = true,
             trailing = false,

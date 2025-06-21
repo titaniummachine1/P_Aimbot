@@ -53,28 +53,29 @@ local function GetSimpleTarget(pLocal)
     return nil
 end
 
--- Minimal history update (run only when needed)
-local lastHistoryUpdate = 0
+-- History update (history stored every tick, heavy calculations limited)
+local lastPredictionUpdate = 0
 local function Main()
-    -- Only run if aimbot is enabled to save performance
+    local pLocal = FastPlayers.GetLocal()
+    if not pLocal or not pLocal:IsAlive() or pLocal:InCond(7) then return end
+
+    -- ALWAYS update history every tick (essential for accurate tracking)
+    HistoryHandler:update()
+
+    -- Only run heavy prediction calculations when needed
     if not Config.main.enable then
         return
     end
 
-    local pLocal = FastPlayers.GetLocal()
-    if not pLocal or not pLocal:IsAlive() or pLocal:InCond(7) then return end
-
-    -- Only update history every 5 ticks to reduce overhead significantly
+    -- Limit heavy prediction updates to every 3 ticks for performance
     local currentTick = globals.TickCount()
-    if currentTick - lastHistoryUpdate < 5 then
+    if currentTick - lastPredictionUpdate < 3 then
         return
     end
-    lastHistoryUpdate = currentTick
+    lastPredictionUpdate = currentTick
 
-    -- Minimal updates only when aiming
-    if input.IsButtonDown(Config.main.aimKey.key) then
-        HistoryHandler:update()
-
+    -- Only update prediction when aiming or when we need visuals
+    if input.IsButtonDown(Config.main.aimKey.key) or Config.visuals.active then
         -- Only update prediction for current target if one exists
         if G.Target then
             Prediction:update(G.Target)

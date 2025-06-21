@@ -184,6 +184,19 @@ function Common.convertPercentageToRGB(percentage)
     return math.max(0, math.min(255, value))
 end
 
+-- Position angles calculation (from original working code)
+function Common.PositionAngles(start, endPos)
+    local delta = endPos - start
+    local yaw = math.atan(delta.y, delta.x) * 180 / math.pi
+    local pitch = math.atan(-delta.z, math.sqrt(delta.x * delta.x + delta.y * delta.y)) * 180 / math.pi
+    return EulerAngles(pitch, yaw, 0)
+end
+
+-- Time to ticks conversion (from original working code)
+function Common.TimeToTicks(time)
+    return math.floor(time / globals.TickInterval() + 0.5)
+end
+
 --[[ Callbacks ]]
 local function OnUnload()                        -- Called when the script is unloaded
     pcall(UnloadLib)                             --unloading lualib

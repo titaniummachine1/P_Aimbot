@@ -147,6 +147,10 @@ local function DrawMenu()
             Config.advanced.maxTargetsToPredict = TimMenu.Slider("Max Targets to Predict",
                 Config.advanced.maxTargetsToPredict or 4, 1, 8, 1)
             TimMenu.NextLine()
+
+            Config.advanced.maxTrackedTargets = TimMenu.Slider("Max Tracked Targets",
+                Config.advanced.maxTrackedTargets or 8, 4, 8, 1)
+            TimMenu.NextLine()
             TimMenu.EndSector()
 
             TimMenu.NextLine()

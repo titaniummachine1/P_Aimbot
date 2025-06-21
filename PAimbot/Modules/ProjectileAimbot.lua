@@ -3,7 +3,7 @@
 
 --[[
     ProjectileAimbot Module
-    Optimized projectile prediction with binary search
+    Restored working prediction approach from original Aimbot.lua
 ]]
 
 -- Dependencies
@@ -17,6 +17,7 @@ local ProjectileData = require("PAimbot.Modules.ProjectileData")
 local ProjectileAimbot = {}
 
 -- Cache frequently used functions for performance
+local M_RADPI = 180 / math.pi
 local atan = math.atan
 local cos = math.cos
 local sin = math.sin
@@ -28,143 +29,249 @@ local TraceHull = engine.TraceHull
 
 local function isNaN(x) return x ~= x end
 
--- Rotate vector function
-local function RotateVector(vector, angle)
-    local rad = math.rad(angle)
-    local cosAngle = math.cos(rad)
-    local sinAngle = math.sin(rad)
-    return Vector3(
-        vector.x * cosAngle - vector.y * sinAngle,
-        vector.x * sinAngle + vector.y * cosAngle,
-        vector.z
-    )
+-- Helper function for forward collision (from original working code)
+local function handleForwardCollision(vel, wallTrace)
+    local vUp = Vector3(0, 0, 1)
+    local FORWARD_COLLISION_ANGLE = 55
+    local normal = wallTrace.plane
+    local angle = math.deg(math.acos(normal:Dot(vUp)))
+    if angle > FORWARD_COLLISION_ANGLE then
+        local dot = vel:Dot(normal)
+        vel = vel - normal * dot
+    end
+    return wallTrace.endpos.x, wallTrace.endpos.y
 end
 
--- Batch-based binary search for optimal prediction
-local function BatchBinarySearch(me, weapon, player, projData, maxTicks)
+-- Helper function for ground collision (from original working code)
+local function handleGroundCollision(vel, groundTrace)
+    local vUp = Vector3(0, 0, 1)
+    local GROUND_COLLISION_ANGLE_LOW = 45
+    local GROUND_COLLISION_ANGLE_HIGH = 60
+    local normal = groundTrace.plane
+    local angle = math.deg(math.acos(normal:Dot(vUp)))
+    local onGround = false
+    if angle < GROUND_COLLISION_ANGLE_LOW then
+        onGround = true
+    elseif angle < GROUND_COLLISION_ANGLE_HIGH then
+        vel.x, vel.y, vel.z = 0, 0, 0
+    else
+        local dot = vel:Dot(normal)
+        vel = vel - normal * dot
+        onGround = true
+    end
+    if onGround then vel.z = 0 end
+    return groundTrace.endpos, onGround
+end
+
+-- Solve projectile trajectory (exact copy from working original)
+function SolveProjectile(origin, dest, speed, gravity, sv_gravity, target, timeToHit)
+    -- Calculate the direction vector from origin to destination
+    local direction = dest - origin
+
+    -- Calculate squared speed for later use in equations
+    local speed_squared = speed * speed
+
+    -- Calculate the effective gravity based on server gravity settings and the specified gravity factor
+    local effective_gravity = sv_gravity * gravity
+
+    -- Calculate the horizontal (2D) distance and vertical (Z-axis) distance between origin and destination
+    local horizontal_distance = direction:Length2D()
+    local vertical_distance = direction.z
+
+    -- Entity filter function to avoid hitting the target itself
+    local shouldHitEntity = function(entity)
+        return entity:GetIndex() ~= target:GetIndex() or entity:GetTeamNumber() ~= target:GetTeamNumber()
+    end
+
+    -- Case for when there is no gravity (e.g., hitscan projectiles)
+    if effective_gravity == 0 then
+        -- Calculate the time to hit based on speed and distance
+        local time_to_target = direction:Length() / speed
+        if time_to_target > timeToHit then
+            return false -- Projectile will fly out of range, so return false
+        end
+
+        -- Perform a trace line to check if the path is clear
+        local trace = TraceLine(origin, dest, G.Constants.MASK_PLAYERSOLID)
+        if trace.fraction ~= 1.0 and trace.entity:GetName() ~= target:GetName() then
+            return false -- Path is obstructed, so return false
+        end
+
+        -- Return the result with no gravity calculations
+        return {
+            angles = Common.PositionAngles(origin, dest),
+            time = time_to_target,
+            Prediction = dest,
+            Positions = { origin, dest }
+        }
+    else
+        -- Ballistic arc calculation when gravity is present
+
+        -- Calculate the term related to gravity and horizontal distance squared
+        local gravity_horizontal_squared = effective_gravity * horizontal_distance * horizontal_distance
+
+        -- Solve the quadratic equation for projectile motion
+        local discriminant = speed_squared * speed_squared -
+            effective_gravity * (gravity_horizontal_squared + 2 * vertical_distance * speed_squared)
+        if discriminant < 0 then return nil end -- No real solution, so return nil
+
+        -- Calculate the pitch and yaw angles required for the projectile to reach the target
+        local sqrt_discriminant = math.sqrt(discriminant)
+        local pitch_angle = math.atan((speed_squared - sqrt_discriminant) / (effective_gravity * horizontal_distance))
+        local yaw_angle = math.atan(direction.y, direction.x)
+
+        if isNaN(pitch_angle) or isNaN(yaw_angle) then return nil end
+
+        -- Convert the pitch and yaw into Euler angles
+        local calculated_angles = EulerAngles(pitch_angle * -M_RADPI, yaw_angle * M_RADPI)
+
+        -- Calculate the time it takes for the projectile to reach the target
+        local time_to_target = horizontal_distance / (math.cos(pitch_angle) * speed)
+
+        if time_to_target > timeToHit then
+            return false -- Projectile will fly out of range, so return false
+        end
+
+        -- Return the calculated angles, time to target, final predicted position, and all positions along the path
+        return {
+            angles = calculated_angles,
+            time = time_to_target,
+            Prediction = dest,
+            Positions = { origin, dest }
+        }
+    end
+end
+
+-- Calculate hit chance percentage (from original)
+local function calculateHitChancePercentage(lastPredictedPos, currentPos)
+    if not lastPredictedPos then
+        return 0
+    end
+
+    -- Calculate horizontal distance (2D distance on the X-Y plane)
+    local horizontalDistance = math.sqrt((currentPos.x - lastPredictedPos.x) ^ 2 + (currentPos.y - lastPredictedPos.y) ^
+        2)
+
+    -- Calculate vertical distance with an allowance for vertical movement
+    local verticalDistance = math.abs(currentPos.z - lastPredictedPos.z)
+
+    -- Define maximum acceptable distances
+    local maxHorizontalDistance = 12 -- Max acceptable horizontal distance in units
+    local maxVerticalDistance = 45   -- Max acceptable vertical distance in units
+
+    -- Normalize the distances to a 0-1 scale
+    local horizontalFactor = math.min(horizontalDistance / maxHorizontalDistance, 1)
+    local verticalFactor = math.min(verticalDistance / maxVerticalDistance, 1)
+
+    -- Calculate the hit chance as a percentage
+    local overallFactor = (horizontalFactor + verticalFactor) / 2
+
+    -- Convert to a percentage where 100% is perfect and 0% is a miss
+    local hitChancePercentage = (1 - overallFactor) * 100
+
+    return hitChancePercentage
+end
+
+-- Calculate trust factor based on number of records (from original)
+local function calculateTrustFactor(numRecords, maxRecords, growthRate)
+    -- Ensure we avoid division by zero
+    if maxRecords == 0 then
+        return 0
+    end
+
+    -- Calculate the ratio of current records to maximum records
+    local ratio = numRecords / maxRecords
+
+    -- Apply an exponential function to grow the trust factor
+    local trustFactor = 1 - math.exp(-growthRate * ratio)
+
+    -- Ensure the trust factor is capped at 1
+    if trustFactor > 1 then
+        trustFactor = 1
+    end
+
+    -- Round the trust factor to 2 decimal places
+    trustFactor = math.floor(trustFactor * 100 + 0.5) / 100
+
+    return trustFactor
+end
+
+-- Calculate adjusted hit chance (from original)
+local function calculateAdjustedHitChance(hitChance, trustFactor)
+    -- Apply the trust factor as a multiplier to the hit chance
+    return math.floor(hitChance * trustFactor * 100 + 0.5) / 100
+end
+
+-- Main projectile target checking function (restored original working approach)
+function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
+    local tick_interval = TickInterval()
     local shootPos = me:GetAbsOrigin() + me:GetPropVector("localdata", "m_vecViewOffset[0]")
-    local tick_interval = TickInterval()
-    local batchSize = 8 -- Predict in batches of 8 ticks
-    local currentBatch = 0
-    local predictionCache = {}
-
-    -- Function to predict a batch if not already cached
-    local function ensureBatchPredicted(batchStart, batchEnd)
-        local batchKey = batchStart
-        if predictionCache[batchKey] then return end
-
-        predictionCache[batchKey] = {}
-        for tick = batchStart, math.min(batchEnd, maxTicks) do
-            predictionCache[batchKey][tick] = PredictPlayerPosition(player, tick)
-        end
-    end
-
-    -- Binary search through batches
-    local minTicks = 1
-    local maxSearchTicks = maxTicks
-
-    for iteration = 1, 10 do -- Max 10 iterations
-        ::continue::
-        local midTicks = math.floor((minTicks + maxSearchTicks) * 0.5)
-
-        -- Ensure we have predictions up to midTicks
-        local batchStart = math.floor((midTicks - 1) / batchSize) * batchSize + 1
-        local batchEnd = batchStart + batchSize - 1
-        ensureBatchPredicted(batchStart, batchEnd)
-
-        -- Get prediction for midTicks
-        local batchKey = math.floor((midTicks - 1) / batchSize) * batchSize + 1
-        local predictedPos = predictionCache[batchKey] and predictionCache[batchKey][midTicks]
-
-        if not predictedPos then
-            -- Need more prediction, expand search
-            minTicks = midTicks + 1
-            goto continue
-        end
-
-        -- Test projectile solution
-        local solution = SolveProjectile(shootPos, predictedPos, projData.Speed, projData.Gravity,
-            client.GetConVar("sv_gravity"))
-
-        if solution and solution.time then
-            local requiredTicks = math.ceil(solution.time / tick_interval)
-
-            -- Check if our prediction time matches projectile flight time
-            if math.abs(requiredTicks - midTicks) <= 2 then -- Within 2 ticks tolerance
-                -- Generate trajectory path for visuals
-                local trajectoryPath = {}
-                for i = 1, math.min(midTicks, 30) do -- Limit to 30 points for performance
-                    local bKey = math.floor((i - 1) / batchSize) * batchSize + 1
-                    if not predictionCache[bKey] then
-                        ensureBatchPredicted(bKey, bKey + batchSize - 1)
-                    end
-                    if predictionCache[bKey] and predictionCache[bKey][i] then
-                        trajectoryPath[i] = predictionCache[bKey][i]
-                    end
-                end
-
-                return {
-                    ticks = midTicks,
-                    position = predictedPos,
-                    solution = solution,
-                    trajectoryPath = trajectoryPath
-                }
-            elseif requiredTicks > midTicks then
-                -- Need more prediction time
-                minTicks = midTicks + 1
-            else
-                -- Can use less prediction time
-                maxSearchTicks = midTicks - 1
-            end
-        else
-            -- No solution found, need more time
-            minTicks = midTicks + 1
-        end
-
-        -- Stop if range is too small
-        if maxSearchTicks - minTicks <= 1 then
-            break
-        end
-    end
-
-    return nil
-end
-
--- Optimized player position prediction
-function PredictPlayerPosition(player, ticks)
-    local tick_interval = TickInterval()
-    local pos = player:GetAbsOrigin()
-    local vel = player:EstimateAbsVelocity()
-    local onGround = Common.IsOnGround(player)
-    local gravity = client.GetConVar("sv_gravity") or 800
-    local stepSize = player:GetPropFloat("localdata", "m_flStepSize") or 18
+    local aimPos = player:GetAbsOrigin() + Vector3(0, 0, 10)
+    local aimOffset = aimPos - player:GetAbsOrigin()
+    local gravity = client.GetConVar("sv_gravity")
+    local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
     local vStep = Vector3(0, 0, stepSize / 2)
-
+    local vPath = {}
+    local lastP, lastV, lastG = player:GetAbsOrigin(), player:EstimateAbsVelocity(), Common.IsOnGround(player)
     local shouldHitEntity = function(entity)
         return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber()
     end
+    local vHitbox = { Vector3(-22, -22, 0), Vector3(22, 22, 80) }
+
+    -- Check initial conditions
+    local projData = ProjectileData.GetProjectileData(me, weapon)
+    if not projData or not gravity or not stepSize then return nil end
+
+    local PredTicks = Config.advanced.maxPredictionTicks or 77
+    local speed = projData.Speed
+
+    -- Early distance check
+    if (me:GetAbsOrigin() - player:GetAbsOrigin()):Length() > PredTicks * speed then return nil end
+
+    local targetAngles
+
+    -- Initialize storage for predictions if not already initialized
+    local playerIndex = player:GetIndex()
+    if not G.HitChanceData.lastPositions[playerIndex] then G.HitChanceData.lastPositions[playerIndex] = {} end
+    if not G.HitChanceData.priorPredictions[playerIndex] then G.HitChanceData.priorPredictions[playerIndex] = {} end
+    if not G.HitChanceData.hitChanceRecords[playerIndex] then G.HitChanceData.hitChanceRecords[playerIndex] = {} end
+
+    -- Variables to accumulate hit chances
+    local totalHitChance = 0
+    local tickCount = 0
 
     -- Apply strafe prediction if enabled
-    if Config.advanced.strafePrediction and G.predictionDelta[player:GetIndex()] then
-        local strafeDelta = G.predictionDelta[player:GetIndex()].strafeDelta
-        if strafeDelta then
-            local ang = vel:Angles()
-            ang.y = ang.y + strafeDelta
-            vel = ang:Forward() * vel:Length()
-        end
+    local strafeAngle = nil
+    if Config.advanced.strafePrediction and G.predictionDelta[playerIndex] then
+        strafeAngle = G.predictionDelta[playerIndex].strafeDelta
     end
 
-    -- Simple physics simulation for specified ticks
-    for i = 1, ticks do
-        pos = pos + vel * tick_interval
+    -- Main Loop for Prediction and Projectile Calculations (EXACT COPY FROM ORIGINAL)
+    for i = 1, PredTicks * 2 do
+        local pos = lastP + lastV * tick_interval
+        local vel = lastV
+        local onGround = lastG
 
-        -- Basic collision detection
-        local groundTrace = TraceHull(pos + vStep, pos - vStep, G.Hitbox.Min, G.Hitbox.Max, G.Constants.MASK_PLAYERSOLID,
+        -- Apply strafeAngle
+        if strafeAngle then
+            local ang = vel:Angles()
+            ang.y = ang.y + strafeAngle
+            vel = ang:Forward() * vel:Length()
+        end
+
+        -- Forward Collision
+        local wallTrace = TraceHull(lastP + vStep, pos + vStep, vHitbox[1], vHitbox[2], G.Constants.MASK_PLAYERSOLID,
             shouldHitEntity)
-        if groundTrace and groundTrace.fraction < 1 then
-            pos = groundTrace.endpos
-            onGround = true
-            vel.z = 0
+        if wallTrace.fraction < 1 then
+            pos.x, pos.y = handleForwardCollision(vel, wallTrace)
+        end
+
+        -- Ground Collision
+        local downStep = onGround and vStep or Vector3()
+        local groundTrace = TraceHull(pos + vStep, pos - downStep, vHitbox[1], vHitbox[2], G.Constants.MASK_PLAYERSOLID,
+            shouldHitEntity)
+        if groundTrace.fraction < 1 then
+            pos, onGround = handleGroundCollision(vel, groundTrace)
         else
             onGround = false
         end
@@ -173,140 +280,100 @@ function PredictPlayerPosition(player, ticks)
         if not onGround then
             vel.z = vel.z - gravity * tick_interval
         end
+
+        lastP, lastV, lastG = pos, vel, onGround
+
+        -- Projectile Targeting Logic
+        pos = lastP + aimOffset
+        vPath[i] = pos -- save path for visuals
+
+        -- Hitchance check and synchronization of predictions
+        if i <= PredTicks then
+            local currentTick = PredTicks - i -- Determine which tick in the future we're currently predicting
+
+            -- Store the last prediction of the current tick
+            G.HitChanceData.lastPositions[playerIndex][currentTick] = G.HitChanceData.priorPredictions[playerIndex]
+                [currentTick] or pos
+
+            -- Update priorPrediction with the current predicted position for this tick
+            G.HitChanceData.priorPredictions[playerIndex][currentTick] = pos
+
+            -- Calculate hit chance for the current tick
+            local hitChance1 = calculateHitChancePercentage(G.HitChanceData.lastPositions[playerIndex][currentTick],
+                G.HitChanceData.priorPredictions[playerIndex][currentTick])
+
+            -- Insert the hit chance record
+            table.insert(G.HitChanceData.hitChanceRecords[playerIndex], hitChance1)
+
+            -- Ensure the number of records does not exceed the maximum allowed
+            local maxRecords = Config.advanced.hitchanceAccuracy or 66
+            if #G.HitChanceData.hitChanceRecords[playerIndex] > maxRecords then
+                table.remove(G.HitChanceData.hitChanceRecords[playerIndex], 1) -- Remove the oldest record
+            end
+
+            -- Accumulate hit chance and tick count
+            totalHitChance = totalHitChance + hitChance1
+            tickCount = tickCount + 1
+        end
+
+        -- Solve the projectile based on the current position
+        local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
+            PredTicks * tick_interval)
+        if solution == nil then goto continue end
+
+        if not solution then
+            -- TODO: Add splash prediction here if needed
+            return nil
+        end
+
+        local time
+        if solution and solution.time then
+            -- Add latency and lerp compensation (CRITICAL - this was missing!)
+            time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+        else
+            return nil
+        end
+
+        local ticks = Common.TimeToTicks(time) + 1
+        if ticks > i then goto continue end
+
+        targetAngles = solution.angles
+        break
+        ::continue::
     end
 
-    return pos + Vector3(0, 0, 10) -- Add aim offset
-end
-
--- Solve projectile trajectory (restored working version)
-function SolveProjectile(startPos, targetPos, speed, projGravity, serverGravity)
-    local diff = targetPos - startPos
-    local dist2D = Vector3(diff.x, diff.y, 0):Length()
-    local heightDiff = diff.z
-
-    local gravity = serverGravity or 800
-
-    -- Handle zero gravity projectiles
-    if projGravity == 0 then
-        local time = dist2D / speed
-        local pitch = math.atan(heightDiff, dist2D)
-        local yaw = math.atan(diff.y, diff.x)
-        return {
-            angles = EulerAngles(math.deg(pitch), math.deg(yaw), 0),
-            time = time
-        }
+    -- Calculate the average hit chance and set the global hitChance variable
+    if tickCount > 0 then
+        G.Aimbot.HitChance = totalHitChance / tickCount
+    else
+        G.Aimbot.HitChance = 0
     end
 
-    -- Ballistic trajectory calculation
-    local g = gravity * projGravity
-    local speedSqr = speed * speed
-    local discriminant = speedSqr * speedSqr - g * (g * dist2D * dist2D + 2 * heightDiff * speedSqr)
-
-    if discriminant < 0 then return nil end
-
-    local sqrt_discriminant = math.sqrt(discriminant)
-    local pitch_angle = math.atan((speedSqr - sqrt_discriminant) / (g * dist2D))
-    local yaw_angle = math.atan(diff.y, diff.x)
-
-    local time_to_target = dist2D / (math.cos(pitch_angle) * speed)
-
-    return {
-        angles = EulerAngles(-math.deg(pitch_angle), math.deg(yaw_angle), 0),
-        time = time_to_target
-    }
-end
-
--- Calculate hit chance percentage
-local function calculateHitChancePercentage(lastPos, currentPos)
-    if not lastPos or not currentPos then return 100 end
-
-    local distance = (lastPos - currentPos):Length()
-    local maxDistance = 50 -- Maximum acceptable prediction error
-
-    return math.max(0, math.min(100, 100 - (distance / maxDistance) * 100))
-end
-
--- Calculate trust factor based on number of records
-local function calculateTrustFactor(numRecords, maxRecords, growthRate)
-    if maxRecords <= 0 then return 1 end
-
-    local ratio = numRecords / maxRecords
-    return math.min(1, ratio ^ (1 / growthRate))
-end
-
--- Main projectile target checking function
-function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
-    local projData = ProjectileData.GetProjectileData(me, weapon)
-    if not projData then return nil end
-
-    -- Get max prediction ticks directly (no conversion needed)
-    local maxTicks = Config.advanced.maxPredictionTicks or 132
-
-    -- Use batch-based binary search to find optimal prediction
-    local result = BatchBinarySearch(me, weapon, player, projData, maxTicks)
-    if not result then return nil end
-
-    -- Calculate hit chance for this prediction
-    local playerIndex = player:GetIndex()
-
-    -- Initialize hit chance tracking
-    if not G.HitChanceData.lastPositions[playerIndex] then G.HitChanceData.lastPositions[playerIndex] = {} end
-    if not G.HitChanceData.priorPredictions[playerIndex] then G.HitChanceData.priorPredictions[playerIndex] = {} end
-    if not G.HitChanceData.hitChanceRecords[playerIndex] then G.HitChanceData.hitChanceRecords[playerIndex] = {} end
-
-    -- Store prediction for hit chance calculation
-    local currentTick = result.ticks
-    G.HitChanceData.lastPositions[playerIndex][currentTick] = G.HitChanceData.priorPredictions[playerIndex][currentTick] or
-        result.position
-    G.HitChanceData.priorPredictions[playerIndex][currentTick] = result.position
-
-    local hitChance = calculateHitChancePercentage(
-        G.HitChanceData.lastPositions[playerIndex][currentTick],
-        G.HitChanceData.priorPredictions[playerIndex][currentTick]
-    )
-
-    table.insert(G.HitChanceData.hitChanceRecords[playerIndex], hitChance)
-
-    -- Maintain history size
-    local maxRecords = Config.advanced.hitchanceAccuracy or 66
-    if #G.HitChanceData.hitChanceRecords[playerIndex] > maxRecords then
-        table.remove(G.HitChanceData.hitChanceRecords[playerIndex], 1)
-    end
-
-    -- Calculate average hit chance with trust factor
-    local totalHitChance = 0
-    for _, chance in ipairs(G.HitChanceData.hitChanceRecords[playerIndex]) do
-        totalHitChance = totalHitChance + chance
-    end
-
-    local avgHitChance = #G.HitChanceData.hitChanceRecords[playerIndex] > 0 and
-        (totalHitChance / #G.HitChanceData.hitChanceRecords[playerIndex]) or 0
-
-    -- Apply trust factor
+    -- Calculate trust factor based on the number of records
     local numRecords = #G.HitChanceData.hitChanceRecords[playerIndex]
     local growthRate = Config.advanced.accuracyWeight or 5
-    local trustFactor = calculateTrustFactor(numRecords, maxRecords, growthRate)
+    local trustFactor = calculateTrustFactor(numRecords, Config.advanced.hitchanceAccuracy or 66, growthRate)
 
-    G.Aimbot.HitChance = avgHitChance * trustFactor
+    -- Adjust the average hit chance based on trust factor
+    G.Aimbot.HitChance = calculateAdjustedHitChance(G.Aimbot.HitChance, trustFactor)
 
-    -- Check minimum hit chance
+    -- Check if the average adjusted hit chance meets the minimum required threshold
     if G.Aimbot.HitChance < Config.main.minHitchance then
-        return nil
+        return nil -- If not, return nil to indicate that the prediction is not reliable
     end
 
-    -- Use trajectory path from binary search result for visuals
-    G.Aimbot.TargetPredictionPath = result.trajectoryPath or {}
+    -- Store trajectory path for visuals
+    G.Aimbot.TargetPredictionPath = vPath
 
-    -- Check distance constraints
-    if (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
+    if not targetAngles or (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
         return nil
     end
 
     return {
         entity = player,
-        angles = result.solution.angles,
+        angles = targetAngles,
         factor = 0,
-        Prediction = result.position
+        Prediction = vPath[#vPath]
     }
 end
 
@@ -352,6 +419,7 @@ function ProjectileAimbot.Run(userCmd)
                 userCmd.buttons = userCmd.buttons | IN_ATTACK
             end
         else
+            -- Normal weapon
             userCmd.buttons = userCmd.buttons | IN_ATTACK
         end
     end
