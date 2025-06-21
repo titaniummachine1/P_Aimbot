@@ -1,15 +1,18 @@
 ---@class Prediction
-local Prediction        = {}
-Prediction.__index      = Prediction
+local Prediction = {}
+Prediction.__index = Prediction
 
-local Common            = require("PAimbot.Common")
-local G                 = require("PAimbot.Globals")
+-- Reverse imports:
+-- Used by: PAimbot.Aimbot, PAimbot.Movement
 
--- Constants and helpers.
-local vUp               = Vector3(0, 0, 1)
-local nullVector        = Vector3(0, 0, 0)
-local ignoreEntities    = { "CTFAmmoPack", "CTFDroppedWeapon" }
-local MAX_SPEED         = 450 -- Default max speed if not provided by player.
+local Common = require("PAimbot.Common")
+local G = require("PAimbot.Globals")
+
+-- Constants and helpers
+local vUp = Vector3(0, 0, 1)
+local nullVector = Vector3(0, 0, 0)
+local ignoreEntities = { "CTFAmmoPack", "CTFDroppedWeapon" }
+local MAX_SPEED = 450 -- Default max speed if not provided by player
 
 -- Create a lookup table for faster class checks
 local ignoreClassLookup = {}
@@ -21,6 +24,9 @@ end
 -- Helper Functions
 --------------------------------------------------------------------------------
 -- Determines if an entity should be considered for collision
+---@param entity Entity The entity to check
+---@param player Entity The player entity to compare against
+---@return boolean Whether the entity should be hit by traces
 local function shouldHitEntityFun(entity, player)
     -- Use logical operators to create a single return statement
     -- Each condition evaluates to true/false and we return true only if all checks pass
@@ -30,28 +36,23 @@ local function shouldHitEntityFun(entity, player)
     local contents = engine.GetPointContents(pos)
 
     return not (
-        ignoreClassLookup[entityClass] or  -- Not in ignore list
-        entity == player or                -- Not the player
-        sameTeam or                        -- Not on same team
-        contents ~= CONTENTS_EMPTY         -- Not in empty space
+        ignoreClassLookup[entityClass] or -- Not in ignore list
+        entity == player or               -- Not the player
+        sameTeam or                       -- Not on same team
+        contents ~= CONTENTS_EMPTY        -- Not in empty space
     )
-end
-
--- Simple check whether the player is on the ground.
-local function IsOnGround(player)
-    local pFlags = player:GetPropInt("m_fFlags")
-    return (pFlags & FL_ONGROUND) == 1
 end
 
 --------------------------------------------------------------------------------
 -- Prediction State: reset, initialization, and update
 --------------------------------------------------------------------------------
+---@param self Prediction
 function Prediction:reset()
-    -- Clear simulation history.
+    -- Clear simulation history
     self.currentTick = 0
     self.cachedPredictions = { pos = {}, vel = {}, onGround = {} }
 
-    -- Clear physics variables.
+    -- Clear physics variables
     self.gravity = nil
     self.stepHeight = nil
     self.position = nil
@@ -63,44 +64,46 @@ function Prediction:reset()
     self.MAX_SPEED = nil
     self.shouldHitEntity = nil
 
-    -- Variables for move intent simulation.
-    self.moveIntent = nil        -- Current intended movement vector.
-    self.initialMoveIntent = nil -- Baseline movement vector at start.
-    self.accumulatedStrafe = 0   -- Accumulated strafe angle (in degrees).
+    -- Variables for move intent simulation
+    self.moveIntent = nil        -- Current intended movement vector
+    self.initialMoveIntent = nil -- Baseline movement vector at start
+    self.accumulatedStrafe = 0   -- Accumulated strafe angle (in degrees)
 end
 
-function Prediction:init()
-    self:reset()
-end
-
--- Update simulation state from the current player's data.
+-- Update simulation state from the current player's data
+---@param self Prediction
+---@param player Entity The player entity to simulate
 function Prediction:update(player)
     self:reset()
 
+    -- Get physics constants from game
     self.gravity = client.GetConVar("sv_gravity") or 800
     self.acceleration = client.GetConVar("sv_accelerate") or 10
     self.friction = client.GetConVar("sv_friction") or 4
     self.stepHeight = player:GetPropFloat("localdata", "m_flStepSize") or 18
 
-    G.Hitbox.Max.z = IsOnGround(player) and 62 or 82
+    -- Set up hitbox dimensions based on player state
+    G.Hitbox.Max.z = Common.IsOnGround(player) and 62 or 82
     self.hitbox = G.Hitbox or { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
     self.vStep = Vector3(0, 0, self.stepHeight)
 
+    -- Get current player state
     self.position = player:GetAbsOrigin()
     self.velocity = player:EstimateAbsVelocity()
+    self.onGround = Common.IsOnGround(player)
+    self.MAX_SPEED = player:GetPropFloat("m_flMaxspeed") or MAX_SPEED
 
-    -- Set the move intent to the current velocity.
+    -- Set the move intent to the current velocity
     self.initialMoveIntent = self.velocity
     self.moveIntent = self.velocity
     self.accumulatedStrafe = 0
 
-    self.onGround = IsOnGround(player)
-    self.MAX_SPEED = player:GetPropFloat("m_flMaxspeed") or MAX_SPEED
-
+    -- Create a closure for entity collision detection
     self.shouldHitEntity = function(entity)
         return shouldHitEntityFun(entity, player)
     end
 
+    -- Get strafe delta from history
     local playerIndex = player:GetIndex()
     local predictionDelta = G.history[playerIndex] or { strafeDelta = 0 }
     self.deltaStrafe = predictionDelta.strafeDelta
@@ -113,24 +116,26 @@ end
 -- and then updates the horizontal velocity using friction and acceleration toward
 -- the desired (move intent) direction. It then handles wall and ground collisions.
 --------------------------------------------------------------------------------
+---@param self Prediction
+---@return table Result containing position, velocity and ground state
 function Prediction:predictTick()
     local dt = G.TickInterval
 
-    -- Apply gravity (vertical component) if airborne.
+    -- Apply gravity (vertical component) if airborne
     if not self.onGround then
         self.velocity.z = self.velocity.z - self.gravity * dt
     end
 
-    -- Rotate the move intent by the current strafe input.
+    -- Rotate the move intent by the current strafe input
     if self.deltaStrafe then
         self.moveIntent = Common.RotateVector(self.moveIntent, self.deltaStrafe)
     end
 
-    -- Compute the desired horizontal direction from the move intent.
+    -- Compute the desired horizontal direction from the move intent
     local desiredDir = Common.Normalize(Vector3(self.moveIntent.x, self.moveIntent.y, 0))
-    local desiredSpeed = self.MAX_SPEED -- Full input implies full speed.
+    local desiredSpeed = self.MAX_SPEED -- Full input implies full speed
 
-    -- --- Friction: reduce current horizontal speed if on ground.
+    -- --- Friction: reduce current horizontal speed if on ground
     local currentHorizontal = Vector3(self.velocity.x, self.velocity.y, 0)
     local currentSpeed = currentHorizontal:Length()
     if self.onGround and currentSpeed > 0 then
@@ -139,7 +144,7 @@ function Prediction:predictTick()
         currentHorizontal = Common.Normalize(currentHorizontal) * newSpeed
     end
 
-    -- --- Acceleration: accelerate horizontally toward the desired direction.
+    -- --- Acceleration: accelerate horizontally toward the desired direction
     local speedAlongWish = currentHorizontal:Dot(desiredDir)
     local addSpeed = desiredSpeed - speedAlongWish
     local accelSpeed = self.acceleration * desiredSpeed * dt
@@ -152,7 +157,7 @@ function Prediction:predictTick()
         currentHorizontal = Common.Normalize(currentHorizontal) * desiredSpeed
     end
 
-    -- Update horizontal velocity; vertical component remains.
+    -- Update horizontal velocity; vertical component remains
     self.velocity.x = currentHorizontal.x
     self.velocity.y = currentHorizontal.y
 
@@ -167,19 +172,26 @@ function Prediction:predictTick()
         pos + self.vStep,
         self.hitbox.Min,
         self.hitbox.Max,
-        MASK_SHOT_HULL,
+        MASK_PLAYERSOLID,
         self.shouldHitEntity
     )
     if wallTrace.fraction < 1 then
         local normal = wallTrace.plane
-        -- Project the desired horizontal direction onto the wall plane.
-        local projectedWish = desiredDir - normal * desiredDir:Dot(normal)
-        projectedWish = Common.Normalize(projectedWish)
-        local horSpeed = currentHorizontal:Length()
-        currentHorizontal = projectedWish * horSpeed
-        self.velocity.x = currentHorizontal.x
-        self.velocity.y = currentHorizontal.y
+        -- In TF2, wall collision only affects velocity, NOT the moveIntent/strafe direction
+        -- The player continues to strafe in their intended direction, but velocity gets clipped along the wall
+
+        -- Clip the velocity along the wall plane (not the desired direction)
+        local dot = vel:Dot(normal)
+        if dot < 0 then -- Only clip if moving into the wall
+            vel = vel - normal * dot
+        end
+
+        -- Update position to the collision point
         pos.x, pos.y = wallTrace.endpos.x, wallTrace.endpos.y
+
+        -- Update the horizontal velocity components after clipping
+        self.velocity.x = vel.x
+        self.velocity.y = vel.y
     end
 
     -- --- Ground Collision Handling ---
@@ -189,7 +201,7 @@ function Prediction:predictTick()
         pos - downStep,
         self.hitbox.Min,
         self.hitbox.Max,
-        MASK_SHOT_HULL, --dw its defined idk why it is showign error
+        MASK_PLAYERSOLID,
         self.shouldHitEntity
     )
     if groundTrace.fraction < 1 then
@@ -217,7 +229,7 @@ function Prediction:predictTick()
         vel.z = vel.z - self.gravity * dt
     end
 
-    -- Cache the simulation results.
+    -- Cache the simulation results
     self.cachedPredictions.pos[self.currentTick + 1] = pos
     self.cachedPredictions.vel[self.currentTick + 1] = vel
     self.cachedPredictions.onGround[self.currentTick + 1] = onGround
@@ -231,8 +243,11 @@ function Prediction:predictTick()
 end
 
 --------------------------------------------------------------------------------
--- Public API for running multiple ticks and rewinding.
+-- Public API for running multiple ticks and rewinding
 --------------------------------------------------------------------------------
+---@param self Prediction
+---@param ticks number Number of ticks to predict forward
+---@return table Result containing position, velocity and ground state
 function Prediction:predict(ticks)
     ticks = ticks or 1
     for i = 1, ticks do
@@ -245,6 +260,9 @@ function Prediction:predict(ticks)
     }
 end
 
+---@param self Prediction
+---@param ticks number Number of ticks to rewind
+---@return table Result containing position, velocity and ground state
 function Prediction:rewind(ticks)
     ticks = ticks or 1
     local targetTick = self.currentTick - ticks
@@ -257,13 +275,15 @@ function Prediction:rewind(ticks)
     }
 end
 
+---@param self Prediction
+---@return table Complete prediction history
 function Prediction:history()
     return self.cachedPredictions
 end
 
 --------------------------------------------------------------------------------
--- Create and return the singleton Prediction instance.
+-- Create and return the singleton Prediction instance
 --------------------------------------------------------------------------------
 local predictionInstance = setmetatable({}, Prediction)
-predictionInstance:init()
+predictionInstance:reset()
 return predictionInstance

@@ -15,7 +15,7 @@ local G = require("PAimbot.Globals")
 local Common = require("PAimbot.Common")
 local Config = require("PAimbot.Config")
 
---[[Classes]]--
+--[[Classes]] --
 local BestTarget = require("PAimbot.Modules.Helpers.BestTarget")
 local HistoryHandler = require("PAimbot.Modules.Prediction.HistoryHandler")
 local Prediction = require("PAimbot.Modules.Prediction.Prediction")
@@ -32,16 +32,16 @@ end
 -- Validate the weapon
 local function IsValidWeapon(pWeapon)
     return pWeapon
-    and (pWeapon:GetWeaponProjectileType() or 0) > 1
-    and (pWeapon:IsShootingWeapon() ~= 1)
+        and (pWeapon:GetWeaponProjectileType() or 0) > 1
+        and (pWeapon:IsShootingWeapon() ~= 1)
 end
 
 -- Function to draw the trajectory
 local function Main()
     local pLocal = entities.GetLocalPlayer()
-        if not IsValidLocalPlayer(pLocal) then return end
+    if not IsValidLocalPlayer(pLocal) then return end
     local weapon = pLocal:GetPropEntity("m_hActiveWeapon")
-        --if not IsValidWeapon(weapon) then return end
+    --if not IsValidWeapon(weapon) then return end
 
     --local ProjData = ProjectileData.GetProjectileData(pLocal, weapon)
     --if not ProjData then return end
@@ -50,11 +50,11 @@ local function Main()
     HistoryHandler:update()
 
     --finds best target
-    G.Target = BestTarget.Get()
+    G.Target = pLocal --BestTarget.Get()
     if not G.Target then return end
 
     Prediction:update(G.Target)
-    Prediction:predict(33)
+    Prediction:predict(66)
 
     G.PredictionData.PredPath = Prediction:history()
 end
