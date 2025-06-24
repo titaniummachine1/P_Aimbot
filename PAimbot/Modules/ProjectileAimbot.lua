@@ -358,7 +358,7 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local projData = ProjectileData.GetProjectileData(me, weapon)
     if not projData or not gravity or not stepSize then return nil end
 
-    local PredTicks = Config.advanced.maxPredictionTicks or 77
+    local PredTicks = Config.advanced.maxPredTicks or 77
     local HitchanceTicks = math.min(33, PredTicks) -- Limit hitchance calculation to 33 ticks max
     local speed = projData.Speed
 
@@ -654,7 +654,7 @@ function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
     local projData = ProjectileData.GetProjectileData(me, weapon)
     if not projData or not gravity or not stepSize then return nil end
 
-    local PredTicks = Config.advanced.maxPredictionTicks or 77
+    local PredTicks = Config.advanced.maxPredTicks or 77
     local speed = projData.Speed
 
     -- Early distance check

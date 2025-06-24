@@ -35,15 +35,16 @@ local defaultConfig = {
     advanced = {
         splashPrediction = true,
         splashAccuracy = 4,
-        predTicks = 77,
+        maxPredTicks = 77,
         -- 0.5 to 8, determines the size of the segments traced; lower values = worse performance (default 2.5)
         projectileSegments = 10,
         maxPredictionTicks = 132,
         maxTargetsToPredict = 4,
-        maxTrackedTargets = 8, -- Number of targets to track for history/entropy (4-8)
+        maxTrackedTargets = 8,     -- Number of targets to track for history/entropy (4-8)
+        maxPredictionHistory = 66, -- History length for motion analysis (7-198, default 66)
         targetingMode = {
-            legit = true,      -- Only shoot at visible targets (legit mode)
-            blatant = false,   -- Allow shooting at hidden targets (blatant mode)
+            legit = true,          -- Only shoot at visible targets (legit mode)
+            blatant = false,       -- Allow shooting at hidden targets (blatant mode)
         },
     },
     visuals = {

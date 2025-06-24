@@ -35,8 +35,8 @@ function HistoryHandler:init()
     -- (Optional) Last delta values
     self.lastDelta = {}
 
-    -- Maximum number of history samples to store per entity (500 ticks for stable motion analysis)
-    self.maxHistoryTicks = 500 -- Fixed at 500 ticks for stable motion analysis
+    -- Maximum number of history samples to store per entity (configurable)
+    self.maxHistoryTicks = Config.advanced.maxPredictionHistory or 66 -- Default 66, range 7-198
 
     -- Table of Kalman filters for smoothing motion data
     self.kalmanFiltersDelta = {}
@@ -400,12 +400,25 @@ function HistoryHandler:getSimplePredictabilityScore(entityIndex)
 end
 
 --------------------------------------------------------------------------------
+-- Update the maximum history length from config
+--------------------------------------------------------------------------------
+function HistoryHandler:updateMaxHistoryFromConfig()
+    local Config = require("PAimbot.Config")
+    local newMaxHistory = Config.advanced.maxPredictionHistory or 66
+    -- Clamp to valid range (7-198)
+    self.maxHistoryTicks = math.max(7, math.min(198, newMaxHistory))
+end
+
+--------------------------------------------------------------------------------
 -- Update history for specific targets (called by BestTarget.UpdateHistory)
 --------------------------------------------------------------------------------
 function HistoryHandler:updateTarget(player)
     if not self:isValidTarget(player) then
         return
     end
+
+    -- Update max history from config (in case it changed)
+    self:updateMaxHistoryFromConfig()
 
     local entityIndex = player:GetIndex()
     local currentTick = globals.TickCount()

@@ -171,10 +171,11 @@ local function DrawMenu()
             TimMenu.Text("Strafe Prediction: Always Enabled")
             TimMenu.NextLine()
 
-            TimMenu.Text("Motion History: 500 ticks (for stable analysis)")
+            Config.advanced.maxPredictionHistory = TimMenu.Slider("Max Prediction History",
+                Config.advanced.maxPredictionHistory or 66, 7, 198, 1)
             TimMenu.NextLine()
 
-            Config.advanced.predTicks = TimMenu.Slider("Prediction Ticks", Config.advanced.predTicks, 1, 200, 1)
+            Config.advanced.maxPredTicks = TimMenu.Slider("Max Pred Ticks", Config.advanced.maxPredTicks, 1, 200, 1)
             TimMenu.NextLine()
 
             Config.advanced.maxPredictionTicks = TimMenu.Slider("Max Prediction Ticks",
