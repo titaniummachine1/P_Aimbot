@@ -133,32 +133,58 @@ local function CalculatePredictabilityHitchance(player)
     return hitchance
 end
 
--- Real prediction for visuals when player is predictable enough
-local function GetRealPrediction(player)
-    if not player then return nil end
+-- Real prediction for visuals - adaptive approach
+local function UpdatePredictionVisuals(player, willShoot)
+    if not player then return end
 
     -- Update prediction system with current player
     Prediction:update(player)
 
-    -- Build prediction path tick by tick (33 ticks by default)
-    local predictionPath = {}
-    local currentState = Prediction:predict(0) -- Get current state
+    -- ADAPTIVE VISUAL PREDICTION: Use smart tick calculation based on situation
+    local me = entities.GetLocalPlayer()
+    if not me then return end
 
-    if currentState and currentState.pos then
-        table.insert(predictionPath, currentState.pos)
+    local distance = (me:GetAbsOrigin() - player:GetAbsOrigin()):Length()
+    local tick_interval = globals.TickInterval()
 
-        -- Predict forward 33 ticks (standard simulation length)
-        for tick = 1, 33 do
-            local nextState = Prediction:predictTick()
-            if nextState and nextState.pos then
-                table.insert(predictionPath, nextState.pos)
-            else
-                break
-            end
-        end
+    -- Base prediction ticks based on situation and distance
+    local MinVisualTicks = 8  -- Minimum for close targets
+    local MaxVisualTicks = 33 -- Maximum for distant targets
+
+    if willShoot then
+        -- When actively aiming/shooting: use more ticks for accuracy
+        -- Scale based on distance: closer targets need fewer ticks
+        local EstimatedTicks = math.ceil(distance / (1000 * tick_interval)) -- Assume ~1000 HU/s average speed
+        local predTicks = math.min(MaxVisualTicks, math.max(MinVisualTicks, EstimatedTicks + 5))
+
+        -- Run the prediction
+        Prediction:predict(predTicks)
+    else
+        -- When just showing visuals: use minimal ticks to reduce lag
+        -- Scale down further for performance
+        local EstimatedTicks = math.ceil(distance / (1200 * tick_interval)) -- Slightly faster estimate
+        local predTicks = math.min(20, math.max(8, EstimatedTicks + 3))     -- Cap at 20 for visuals-only
+
+        -- Run the prediction
+        Prediction:predict(predTicks)
     end
 
-    return predictionPath
+    -- Get the prediction path directly from the prediction system
+    local predictionHistory = Prediction:history()
+    if predictionHistory and predictionHistory.pos then
+        -- Convert prediction history to simple path array for visuals
+        local predictionPath = {}
+        local maxPathLength = willShoot and MaxVisualTicks or 20 -- Limit path length for visuals
+
+        for i = 1, maxPathLength do
+            if predictionHistory.pos[i] then
+                table.insert(predictionPath, predictionHistory.pos[i])
+            else
+                break -- Stop if no more prediction data
+            end
+        end
+        G.Aimbot.TargetPredictionPath = predictionPath
+    end
 end
 
 -- History update (history stored every tick, heavy calculations limited)
@@ -187,16 +213,13 @@ local function Main()
             G.Aimbot.PredictabilityHitchance = predictabilityHitchance -- Store for visuals/debug
 
             -- Always show real prediction when aiming (for visuals)
-            local predictionPath = GetRealPrediction(currentTarget)
-            if predictionPath then
-                G.Aimbot.TargetPredictionPath = predictionPath
-            end
+            UpdatePredictionVisuals(currentTarget, true)
         end
     end
 
     -- Update prediction for visuals if enabled
     if Config.visuals.active and currentTarget then
-        Prediction:update(currentTarget)
+        UpdatePredictionVisuals(currentTarget, false)
     end
 end
 

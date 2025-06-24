@@ -326,7 +326,7 @@ local function calculateAdjustedHitChance(hitChance, trustFactor)
     return math.floor(hitChance * trustFactor * 100 + 0.5) / 100
 end
 
--- Main projectile target checking function (restored original working approach)
+-- Main projectile target checking function with adaptive prediction optimization
 function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local tick_interval = TickInterval()
     local shootPos = me:GetAbsOrigin() + me:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -336,6 +336,7 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
     local vStep = Vector3(0, 0, stepSize / 2)
     local vPath = {}
+
     -- Start with lag-compensated real-time position
     local latency = G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
     local basePos = player:GetAbsOrigin()
@@ -358,17 +359,26 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local projData = ProjectileData.GetProjectileData(me, weapon)
     if not projData or not gravity or not stepSize then return nil end
 
-    local PredTicks = Config.advanced.maxPredTicks or 77
-    local HitchanceTicks = math.min(33, PredTicks) -- Limit hitchance calculation to 33 ticks max
+    -- ADAPTIVE PREDICTION: Start with minimal ticks, increase only if needed
+    local MinPredTicks = 5    -- Start with very few ticks for close/easy targets
+    local MaxPredTicks = 66   -- Maximum ticks for difficult long-range targets
+    local HitchanceTicks = 33 -- Fixed for hitchance calculation (good balance)
     local speed = projData.Speed
 
-    -- Early distance check
-    if (me:GetAbsOrigin() - player:GetAbsOrigin()):Length() > PredTicks * speed then return nil end
+    -- Calculate reasonable prediction range based on distance and projectile speed
+    local distance = (me:GetAbsOrigin() - player:GetAbsOrigin()):Length()
+    local EstimatedTicks = math.ceil(distance / (speed * tick_interval))
+
+    -- Smart prediction limit: use estimated ticks but clamp to reasonable bounds
+    local SmartMaxTicks = math.min(MaxPredTicks, math.max(MinPredTicks, EstimatedTicks + 10))
+
+    -- Early distance check - if target is impossibly far, skip entirely
+    if distance > MaxPredTicks * speed * tick_interval then return nil end
 
     local targetAngles
+    local foundSolution = false
 
     -- Initialize storage for predictions if not already initialized
-    local playerIndex = player:GetIndex()
     if not G.HitChanceData.lastPositions[playerIndex] then G.HitChanceData.lastPositions[playerIndex] = {} end
     if not G.HitChanceData.priorPredictions[playerIndex] then G.HitChanceData.priorPredictions[playerIndex] = {} end
     if not G.HitChanceData.hitChanceRecords[playerIndex] then G.HitChanceData.hitChanceRecords[playerIndex] = {} end
@@ -377,14 +387,8 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local totalHitChance = 0
     local tickCount = 0
 
-    -- Apply strafe prediction (now always enabled)
-    local strafeAngle = nil
-    if G.predictionDelta[playerIndex] then
-        strafeAngle = G.predictionDelta[playerIndex].strafeDelta
-    end
-
-    -- Main Loop for Prediction and Projectile Calculations (EXACT COPY FROM ORIGINAL)
-    for i = 1, PredTicks * 2 do
+    -- OPTIMIZED PREDICTION LOOP: Try to find solution as early as possible
+    for i = 1, SmartMaxTicks do
         local pos = lastP + lastV * tick_interval
         local vel = lastV
         local onGround = lastG
@@ -435,7 +439,7 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
         pos = lastP + aimOffset
         vPath[i] = pos -- save path for visuals
 
-        -- Hitchance check and synchronization of predictions (LIMITED TO 33 TICKS)
+        -- Hitchance check and synchronization of predictions (LIMITED TO HitchanceTicks)
         if i <= HitchanceTicks then
             local currentTick = HitchanceTicks - i -- Determine which tick in the future we're currently predicting
 
@@ -464,46 +468,52 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
             tickCount = tickCount + 1
         end
 
-        -- Solve the projectile based on the current position
-        local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
-            PredTicks * tick_interval)
-        if solution == nil then goto continue end
+        -- EARLY SOLUTION CHECK: Try to solve projectile at current tick
+        -- Only check every few ticks for performance (except for the first few ticks)
+        local shouldCheckSolution = (i <= MinPredTicks) or (i % 3 == 0) or (i >= SmartMaxTicks - 5)
 
-        if not solution then
-            -- Try splash prediction for hidden targets if enabled
-            if Config.advanced.splashPrediction and projData.Gravity == 0 then -- Only for explosive projectiles
-                local splashPos = FindBestSplashPosition(shootPos, pos, player)
-                if splashPos then
-                    solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity, player,
-                        PredTicks * tick_interval)
-                    if solution then
-                        -- Mark this as a splash shot for visuals
-                        G.Aimbot.IsSplashShot = true
+        if shouldCheckSolution then
+            local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
+                SmartMaxTicks * tick_interval)
+
+            if solution ~= nil then
+                if solution then
+                    -- We found a valid solution! Check if projectile timing works
+                    local time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+                    local ticks = Common.TimeToTicks(time) + 1
+
+                    if ticks <= i then
+                        -- PERFECT! We found a solution that works at this tick
+                        targetAngles = solution.angles
+                        foundSolution = true
+                        G.Aimbot.IsSplashShot = false
+                        break -- Exit early - we found our solution!
+                    end
+                else
+                    -- Try splash prediction for hidden targets if enabled
+                    if Config.advanced.splashPrediction and projData.Gravity == 0 then -- Only for explosive projectiles
+                        local splashPos = FindBestSplashPosition(shootPos, pos, player)
+                        if splashPos then
+                            solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity,
+                                player,
+                                SmartMaxTicks * tick_interval)
+                            if solution then
+                                local time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+                                local ticks = Common.TimeToTicks(time) + 1
+
+                                if ticks <= i then
+                                    -- Found splash solution!
+                                    targetAngles = solution.angles
+                                    foundSolution = true
+                                    G.Aimbot.IsSplashShot = true
+                                    break -- Exit early with splash solution
+                                end
+                            end
+                        end
                     end
                 end
             end
-
-            if not solution then
-                return nil
-            end
-        else
-            G.Aimbot.IsSplashShot = false
         end
-
-        local time
-        if solution and solution.time then
-            -- Add latency and lerp compensation (CRITICAL - this was missing!)
-            time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
-        else
-            return nil
-        end
-
-        local ticks = Common.TimeToTicks(time) + 1
-        if ticks > i then goto continue end
-
-        targetAngles = solution.angles
-        break
-        ::continue::
     end
 
     -- Calculate the average hit chance and set the global hitChance variable
@@ -515,12 +525,17 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
 
     -- Calculate trust factor based on the number of records
     local numRecords = #G.HitChanceData.hitChanceRecords[playerIndex]
-    local growthRate = 5  -- Default growth rate (was Config.advanced.accuracyWeight)
-    local maxRecords = 66 -- Default max records (was Config.advanced.hitchanceAccuracy)
+    local growthRate = 5  -- Default growth rate
+    local maxRecords = 66 -- Default max records
     local trustFactor = calculateTrustFactor(numRecords, maxRecords, growthRate)
 
     -- Adjust the average hit chance based on trust factor
     G.Aimbot.HitChance = calculateAdjustedHitChance(G.Aimbot.HitChance, trustFactor)
+
+    -- Check if we found a solution and if hitchance meets requirements
+    if not foundSolution or not targetAngles then
+        return nil
+    end
 
     -- Check if the average adjusted hit chance meets the minimum required threshold
     if G.Aimbot.HitChance < Config.main.minHitchance then
@@ -530,7 +545,8 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     -- Store trajectory path for visuals
     G.Aimbot.TargetPredictionPath = vPath
 
-    if not targetAngles or (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
+    -- Final distance check
+    if (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
         return nil
     end
 
@@ -620,7 +636,7 @@ function ProjectileAimbot.RunDirect(userCmd)
     end
 end
 
--- Direct target checking (skip hitchance validation)
+-- Direct target checking (skip hitchance validation) with adaptive prediction
 function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
     local tick_interval = TickInterval()
     local shootPos = me:GetAbsOrigin() + me:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -639,7 +655,6 @@ function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
     -- Use enhanced motion data from HistoryHandler if available
     local playerIndex = player:GetIndex()
     local motionData = G.history[playerIndex]
-    local strafeAngle = motionData and motionData.strafeDelta or 0
 
     -- Compensate for network lag by advancing position to real-time
     local lastP = basePos + baseVel * latency
@@ -654,16 +669,26 @@ function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
     local projData = ProjectileData.GetProjectileData(me, weapon)
     if not projData or not gravity or not stepSize then return nil end
 
-    local PredTicks = Config.advanced.maxPredTicks or 77
+    -- ADAPTIVE PREDICTION: Start with minimal ticks, increase only if needed
+    local MinPredTicks = 5  -- Start with very few ticks for close/easy targets
+    local MaxPredTicks = 66 -- Maximum ticks for difficult long-range targets
     local speed = projData.Speed
 
-    -- Early distance check
-    if (me:GetAbsOrigin() - player:GetAbsOrigin()):Length() > PredTicks * speed then return nil end
+    -- Calculate reasonable prediction range based on distance and projectile speed
+    local distance = (me:GetAbsOrigin() - player:GetAbsOrigin()):Length()
+    local EstimatedTicks = math.ceil(distance / (speed * tick_interval))
+
+    -- Smart prediction limit: use estimated ticks but clamp to reasonable bounds
+    local SmartMaxTicks = math.min(MaxPredTicks, math.max(MinPredTicks, EstimatedTicks + 10))
+
+    -- Early distance check - if target is impossibly far, skip entirely
+    if distance > MaxPredTicks * speed * tick_interval then return nil end
 
     local targetAngles
+    local foundSolution = false
 
-    -- Enhanced prediction using motion data
-    for i = 1, PredTicks do
+    -- OPTIMIZED PREDICTION LOOP: Try to find solution as early as possible (no hitchance checks)
+    for i = 1, SmartMaxTicks do
         local pos = lastP + lastV * tick_interval
         local vel = lastV
         local onGround = lastG
@@ -714,50 +739,64 @@ function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
         pos = lastP + aimOffset
         vPath[i] = pos
 
-        -- Solve the projectile based on the current position (no hitchance validation)
-        local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
-            PredTicks * tick_interval)
-        if solution == nil then goto continue end
+        -- EARLY SOLUTION CHECK: Try to solve projectile at current tick (no hitchance validation)
+        -- Check more frequently since we're skipping hitchance calculations
+        local shouldCheckSolution = (i <= MinPredTicks) or (i % 2 == 0) or (i >= SmartMaxTicks - 3)
 
-        if not solution then
-            -- Try splash prediction for hidden targets if enabled
-            if Config.advanced.splashPrediction and projData.Gravity == 0 then
-                local splashPos = FindBestSplashPosition(shootPos, pos, player)
-                if splashPos then
-                    solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity, player,
-                        PredTicks * tick_interval)
-                    if solution then
-                        G.Aimbot.IsSplashShot = true
+        if shouldCheckSolution then
+            local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
+                SmartMaxTicks * tick_interval)
+
+            if solution ~= nil then
+                if solution then
+                    -- We found a valid solution! Check if projectile timing works
+                    local time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+                    local ticks = Common.TimeToTicks(time) + 1
+
+                    if ticks <= i then
+                        -- PERFECT! We found a solution that works at this tick
+                        targetAngles = solution.angles
+                        foundSolution = true
+                        G.Aimbot.IsSplashShot = false
+                        break -- Exit early - we found our solution!
+                    end
+                else
+                    -- Try splash prediction for hidden targets if enabled
+                    if Config.advanced.splashPrediction and projData.Gravity == 0 then
+                        local splashPos = FindBestSplashPosition(shootPos, pos, player)
+                        if splashPos then
+                            solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity,
+                                player,
+                                SmartMaxTicks * tick_interval)
+                            if solution then
+                                local time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+                                local ticks = Common.TimeToTicks(time) + 1
+
+                                if ticks <= i then
+                                    -- Found splash solution!
+                                    targetAngles = solution.angles
+                                    foundSolution = true
+                                    G.Aimbot.IsSplashShot = true
+                                    break -- Exit early with splash solution
+                                end
+                            end
+                        end
                     end
                 end
             end
-
-            if not solution then
-                goto continue
-            end
-        else
-            G.Aimbot.IsSplashShot = false
         end
+    end
 
-        local time
-        if solution and solution.time then
-            time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
-        else
-            goto continue
-        end
-
-        local ticks = Common.TimeToTicks(time) + 1
-        if ticks > i then goto continue end
-
-        targetAngles = solution.angles
-        break
-        ::continue::
+    -- Check if we found a solution
+    if not foundSolution or not targetAngles then
+        return nil
     end
 
     -- Store trajectory path for visuals
     G.Aimbot.TargetPredictionPath = vPath
 
-    if not targetAngles or (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
+    -- Final distance check
+    if (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
         return nil
     end
 

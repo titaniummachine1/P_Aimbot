@@ -168,18 +168,11 @@ local function DrawMenu()
 
             -- Prediction Settings Section
             TimMenu.BeginSector("Prediction Settings")
-            TimMenu.Text("Strafe Prediction: Always Enabled")
+            TimMenu.Text("Prediction: 33 ticks (fixed for optimal performance)")
             TimMenu.NextLine()
 
             Config.advanced.maxPredictionHistory = TimMenu.Slider("Max Prediction History",
                 Config.advanced.maxPredictionHistory or 66, 7, 198, 1)
-            TimMenu.NextLine()
-
-            Config.advanced.maxPredTicks = TimMenu.Slider("Max Pred Ticks", Config.advanced.maxPredTicks, 1, 200, 1)
-            TimMenu.NextLine()
-
-            Config.advanced.maxPredictionTicks = TimMenu.Slider("Max Prediction Ticks",
-                Config.advanced.maxPredictionTicks or 132, 10, 300, 1)
             TimMenu.NextLine()
             TimMenu.EndSector()
 
