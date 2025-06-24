@@ -359,6 +359,7 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     if not projData or not gravity or not stepSize then return nil end
 
     local PredTicks = Config.advanced.maxPredictionTicks or 77
+    local HitchanceTicks = math.min(33, PredTicks) -- Limit hitchance calculation to 33 ticks max
     local speed = projData.Speed
 
     -- Early distance check
@@ -434,9 +435,9 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
         pos = lastP + aimOffset
         vPath[i] = pos -- save path for visuals
 
-        -- Hitchance check and synchronization of predictions
-        if i <= PredTicks then
-            local currentTick = PredTicks - i -- Determine which tick in the future we're currently predicting
+        -- Hitchance check and synchronization of predictions (LIMITED TO 33 TICKS)
+        if i <= HitchanceTicks then
+            local currentTick = HitchanceTicks - i -- Determine which tick in the future we're currently predicting
 
             -- Store the last prediction of the current tick
             G.HitChanceData.lastPositions[playerIndex][currentTick] = G.HitChanceData.priorPredictions[playerIndex]

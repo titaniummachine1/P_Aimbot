@@ -35,8 +35,8 @@ function HistoryHandler:init()
     -- (Optional) Last delta values
     self.lastDelta = {}
 
-    -- Maximum number of history samples to store per entity (changed from strafeSamples to historyLengthTicks)
-    self.maxHistoryTicks = math.min(Config.advanced.historyLengthTicks or 66, 500) -- Max 500 ticks
+    -- Maximum number of history samples to store per entity (500 ticks for stable motion analysis)
+    self.maxHistoryTicks = 500 -- Fixed at 500 ticks for stable motion analysis
 
     -- Table of Kalman filters for smoothing motion data
     self.kalmanFiltersDelta = {}
@@ -364,22 +364,37 @@ function HistoryHandler:getSimplePredictabilityScore(entityIndex)
         return 1.0 -- High unpredictability if insufficient data
     end
 
-    -- SIMPLIFIED: Only look at recent strafe consistency for performance
-    local recentSamples = math.min(#history, 5) -- Only check last 5 samples
+    -- Use more samples for stable analysis (up to 50 samples instead of 5)
+    local recentSamples = math.min(#history, 50) -- Check up to 50 samples for stability
     local strafeDeltaSum = 0
-    local strafeVariance = 0
+    local accelSum = 0
+    local jerkSum = 0
 
     for i = 1, recentSamples do
         local sample = history[i]
-        if sample and sample.strafeDelta then
-            strafeDeltaSum = strafeDeltaSum + math.abs(sample.strafeDelta)
+        if sample then
+            if sample.strafeDelta then
+                strafeDeltaSum = strafeDeltaSum + math.abs(sample.strafeDelta)
+            end
+            if sample.acceleration then
+                accelSum = accelSum + sample.acceleration:Length()
+            end
+            if sample.jerk then
+                jerkSum = jerkSum + sample.jerk:Length()
+            end
         end
     end
 
     local avgStrafeDelta = strafeDeltaSum / recentSamples
+    local avgAccel = accelSum / recentSamples
+    local avgJerk = jerkSum / recentSamples
 
-    -- Simple predictability: lower average strafe = more predictable
-    local predictabilityScore = math.min(avgStrafeDelta / 45.0, 1.0) -- Normalize to 0-1
+    -- Combined predictability score using multiple motion components
+    local predictabilityScore = (
+        math.min(avgStrafeDelta / 45.0, 1.0) * 0.4 + -- Strafe: 40%
+        math.min(avgAccel / 200.0, 1.0) * 0.35 +     -- Acceleration: 35%
+        math.min(avgJerk / 500.0, 1.0) * 0.25        -- Jerk: 25%
+    )
 
     return predictabilityScore
 end

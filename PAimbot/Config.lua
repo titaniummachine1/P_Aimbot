@@ -36,7 +36,6 @@ local defaultConfig = {
         splashPrediction = true,
         splashAccuracy = 4,
         predTicks = 77,
-        historyLengthTicks = 44, -- Reduced from 66 to 20 for much better performance
         -- 0.5 to 8, determines the size of the segments traced; lower values = worse performance (default 2.5)
         projectileSegments = 10,
         maxPredictionTicks = 132,

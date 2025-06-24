@@ -86,14 +86,6 @@ local function DrawMenu()
 
                 Config.main.autoShoot = TimMenu.Checkbox("Auto Shoot", Config.main.autoShoot)
                 TimMenu.NextLine()
-
-                -- Add helpful description for auto-shoot behavior
-                if Config.main.autoShoot then
-                    TimMenu.Text("Auto-shoot: ON (shoots when HC >= threshold)")
-                else
-                    TimMenu.Text("Manual: +attack always works regardless of HC")
-                end
-                TimMenu.NextLine()
             end
             TimMenu.EndSector()
 
@@ -179,8 +171,7 @@ local function DrawMenu()
             TimMenu.Text("Strafe Prediction: Always Enabled")
             TimMenu.NextLine()
 
-            Config.advanced.historyLengthTicks = TimMenu.Slider("History Length (Ticks)",
-                Config.advanced.historyLengthTicks, 10, 500, 1)
+            TimMenu.Text("Motion History: 500 ticks (for stable analysis)")
             TimMenu.NextLine()
 
             Config.advanced.predTicks = TimMenu.Slider("Prediction Ticks", Config.advanced.predTicks, 1, 200, 1)

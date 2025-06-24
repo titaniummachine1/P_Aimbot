@@ -134,21 +134,21 @@ local function CalculatePredictabilityHitchance(player)
 end
 
 -- Real prediction for visuals when player is predictable enough
-local function GetRealPrediction(player, maxTicks)
+local function GetRealPrediction(player)
     if not player then return nil end
 
     -- Update prediction system with current player
     Prediction:update(player)
 
-    -- Build prediction path tick by tick
+    -- Build prediction path tick by tick (33 ticks by default)
     local predictionPath = {}
     local currentState = Prediction:predict(0) -- Get current state
 
     if currentState and currentState.pos then
         table.insert(predictionPath, currentState.pos)
 
-        -- Predict forward tick by tick
-        for tick = 1, maxTicks do
+        -- Predict forward 33 ticks (standard simulation length)
+        for tick = 1, 33 do
             local nextState = Prediction:predictTick()
             if nextState and nextState.pos then
                 table.insert(predictionPath, nextState.pos)
@@ -187,8 +187,7 @@ local function Main()
             G.Aimbot.PredictabilityHitchance = predictabilityHitchance -- Store for visuals/debug
 
             -- Always show real prediction when aiming (for visuals)
-            local fullPredTicks = Config.advanced.predTicks or 77
-            local predictionPath = GetRealPrediction(currentTarget, fullPredTicks)
+            local predictionPath = GetRealPrediction(currentTarget)
             if predictionPath then
                 G.Aimbot.TargetPredictionPath = predictionPath
             end
@@ -228,10 +227,24 @@ local function OnCreateMove(userCmd)
         return
     end
 
-    -- Run full projectile calculation to get real hitchance
-    local aimResult = ProjectileAimbot.CheckProjectileTarget(me, weapon, currentTarget)
+    -- Always run the projectile calculation for aiming (even if hitchance is low)
+    local aimResult = nil
+
+    if isActivelyShooting then
+        -- For manual shooting, use direct method that bypasses hitchance validation
+        aimResult = ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, currentTarget)
+    else
+        -- For auto-shooting, use normal method that respects hitchance
+        aimResult = ProjectileAimbot.CheckProjectileTarget(me, weapon, currentTarget)
+    end
+
+    -- If we still don't have a solution, try the direct method as fallback for aiming
+    if not aimResult and not isActivelyShooting then
+        aimResult = ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, currentTarget)
+    end
+
     if not aimResult then
-        return -- No valid solution found
+        return -- No valid solution found at all
     end
 
     -- Store current target and angles
