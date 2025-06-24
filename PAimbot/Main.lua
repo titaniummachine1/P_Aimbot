@@ -244,14 +244,20 @@ local function OnCreateMove(userCmd)
         engine.SetViewAngles(aimResult.angles)
     end
 
-    -- Determine if we should shoot based on:
-    -- 1. Player actively shooting (+attack), OR
-    -- 2. Auto-shoot enabled AND hitchance threshold met
+    -- Determine if we should shoot based on different scenarios:
     local actualHitchance = G.Aimbot.HitChance or 0
-    local shouldAutoShoot = Config.main.autoShoot and actualHitchance >= Config.main.minHitchance
+    local shouldShoot = false
 
-    if isActivelyShooting or shouldAutoShoot then
-        -- Auto shoot logic
+    if isActivelyShooting then
+        -- Player is manually shooting - always allow (regardless of auto-shoot setting or hitchance)
+        shouldShoot = true
+    elseif Config.main.autoShoot then
+        -- Auto-shoot is enabled - only shoot if hitchance threshold is met
+        shouldShoot = actualHitchance >= Config.main.minHitchance
+    end
+
+    if shouldShoot then
+        -- Apply shooting logic
         if weapon:GetWeaponID() == TF_WEAPON_COMPOUND_BOW then
             local chargeBeginTime = weapon:GetPropFloat("PipebombLauncherLocalData", "m_flChargeBeginTime") or 0
             if chargeBeginTime > 0 then

@@ -86,6 +86,14 @@ local function DrawMenu()
 
                 Config.main.autoShoot = TimMenu.Checkbox("Auto Shoot", Config.main.autoShoot)
                 TimMenu.NextLine()
+
+                -- Add helpful description for auto-shoot behavior
+                if Config.main.autoShoot then
+                    TimMenu.Text("Auto-shoot: ON (shoots when HC >= threshold)")
+                else
+                    TimMenu.Text("Manual: +attack always works regardless of HC")
+                end
+                TimMenu.NextLine()
             end
             TimMenu.EndSector()
 
@@ -220,111 +228,81 @@ local function DrawMenu()
 
         -- Visuals Tab
         if Config.menu.tabs.visuals then
-            -- Main Visual Settings (Left Column)
+            -- Main Visual Settings
             TimMenu.BeginSector("Visual Settings")
             Config.visuals.active = TimMenu.Checkbox("Enable Visuals", Config.visuals.active)
-            TimMenu.NextLine()
 
             if Config.visuals.active then
-                Config.visuals.visualizePath = TimMenu.Checkbox("Visualize Player Path", Config.visuals.visualizePath)
                 TimMenu.NextLine()
-
-                Config.visuals.visualizeProjectile = TimMenu.Checkbox("Visualize Projectile Path",
+                Config.visuals.visualizePath = TimMenu.Checkbox("Player Path", Config.visuals.visualizePath)
+                Config.visuals.visualizeProjectile = TimMenu.Checkbox("Projectile Path",
                     Config.visuals.visualizeProjectile)
                 TimMenu.NextLine()
-
-                Config.visuals.visualizeHitPos = TimMenu.Checkbox("Visualize Hit Position",
-                    Config.visuals.visualizeHitPos)
-                TimMenu.NextLine()
-
+                Config.visuals.visualizeHitPos = TimMenu.Checkbox("Hit Position", Config.visuals.visualizeHitPos)
                 Config.visuals.crosshair = TimMenu.Checkbox("Crosshair", Config.visuals.crosshair)
                 TimMenu.NextLine()
-
-                Config.visuals.visualizeHitchance = TimMenu.Checkbox("Visualize Hit Chance",
-                    Config.visuals.visualizeHitchance)
-                TimMenu.NextLine()
-
-                Config.visuals.nccPred = TimMenu.Checkbox("Nullcore Style Prediction", Config.visuals.nccPred)
-                TimMenu.NextLine()
+                Config.visuals.visualizeHitchance = TimMenu.Checkbox("Hit Chance", Config.visuals.visualizeHitchance)
+                Config.visuals.nccPred = TimMenu.Checkbox("NCC Style", Config.visuals.nccPred)
 
                 if Config.visuals.visualizePath then
-                    TimMenu.Text("Path Style:")
+                    TimMenu.NextLine()
                     Config.visuals.path_styles_selected = TimMenu.Selector("Path Style",
                         Config.visuals.path_styles_selected, Config.visuals.path_styles)
-                    TimMenu.NextLine()
                 end
             end
             TimMenu.EndSector()
 
             if Config.visuals.active then
-                -- Impact Polygon Settings (Right Column)
-                TimMenu.SameLine()
-                TimMenu.BeginSector("Impact Polygon")
-                Config.visuals.polygon.enabled = TimMenu.Checkbox("Enable Impact Polygon", Config.visuals.polygon
-                    .enabled)
                 TimMenu.NextLine()
 
-                if Config.visuals.polygon.enabled then
-                    Config.visuals.polygon.size = TimMenu.Slider("Size", Config.visuals.polygon.size, 5, 50, 1)
+                -- Path Line Settings
+                TimMenu.BeginSector("Path Lines")
+                Config.visuals.line.enabled = TimMenu.Checkbox("Enable Lines", Config.visuals.line.enabled)
+                if Config.visuals.line.enabled then
                     TimMenu.NextLine()
+                    Config.visuals.line.r = TimMenu.Slider("Red", Config.visuals.line.r, 0, 255, 1)
+                    Config.visuals.line.g = TimMenu.Slider("Green", Config.visuals.line.g, 0, 255, 1)
+                    TimMenu.NextLine()
+                    Config.visuals.line.b = TimMenu.Slider("Blue", Config.visuals.line.b, 0, 255, 1)
+                    Config.visuals.line.a = TimMenu.Slider("Alpha", Config.visuals.line.a, 0, 255, 1)
+                end
+                TimMenu.EndSector()
 
+                TimMenu.NextLine()
+
+                -- Impact Polygon Settings
+                TimMenu.BeginSector("Impact Polygon")
+                Config.visuals.polygon.enabled = TimMenu.Checkbox("Enable Polygon", Config.visuals.polygon.enabled)
+                if Config.visuals.polygon.enabled then
+                    TimMenu.NextLine()
+                    Config.visuals.polygon.size = TimMenu.Slider("Size", Config.visuals.polygon.size, 5, 50, 1)
                     Config.visuals.polygon.segments = TimMenu.Slider("Segments", Config.visuals.polygon.segments, 8, 32,
                         1)
                     TimMenu.NextLine()
-
-                    -- Polygon Colors (very compact - 2 sliders per line)
-                    TimMenu.Text("Polygon Colors:")
-                    Config.visuals.polygon.r = TimMenu.Slider("R", Config.visuals.polygon.r, 0, 255, 1)
-                    TimMenu.SameLine()
-                    Config.visuals.polygon.g = TimMenu.Slider("G", Config.visuals.polygon.g, 0, 255, 1)
+                    Config.visuals.polygon.r = TimMenu.Slider("Red", Config.visuals.polygon.r, 0, 255, 1)
+                    Config.visuals.polygon.g = TimMenu.Slider("Green", Config.visuals.polygon.g, 0, 255, 1)
                     TimMenu.NextLine()
-                    Config.visuals.polygon.b = TimMenu.Slider("B", Config.visuals.polygon.b, 0, 255, 1)
-                    TimMenu.SameLine()
-                    Config.visuals.polygon.a = TimMenu.Slider("A", Config.visuals.polygon.a, 0, 255, 1)
-                    TimMenu.NextLine()
+                    Config.visuals.polygon.b = TimMenu.Slider("Blue", Config.visuals.polygon.b, 0, 255, 1)
+                    Config.visuals.polygon.a = TimMenu.Slider("Alpha", Config.visuals.polygon.a, 0, 255, 1)
                 end
                 TimMenu.EndSector()
 
                 TimMenu.NextLine()
 
-                -- Path Line Settings (Left Column, Second Row)
-                TimMenu.BeginSector("Path Lines")
-                Config.visuals.line.enabled = TimMenu.Checkbox("Enable Path Lines", Config.visuals.line.enabled)
-                TimMenu.NextLine()
-
-                if Config.visuals.line.enabled then
-                    -- Line Colors (compact - 2 sliders per line)
-                    TimMenu.Text("Line Colors:")
-                    Config.visuals.line.r = TimMenu.Slider("R", Config.visuals.line.r, 0, 255, 1)
-                    TimMenu.SameLine()
-                    Config.visuals.line.g = TimMenu.Slider("G", Config.visuals.line.g, 0, 255, 1)
-                    TimMenu.NextLine()
-                    Config.visuals.line.b = TimMenu.Slider("B", Config.visuals.line.b, 0, 255, 1)
-                    TimMenu.SameLine()
-                    Config.visuals.line.a = TimMenu.Slider("A", Config.visuals.line.a, 0, 255, 1)
-                    TimMenu.NextLine()
-                end
-                TimMenu.EndSector()
-
-                -- Outline Settings (Right Column, Second Row)
-                TimMenu.SameLine()
-                TimMenu.BeginSector("Outline Settings")
-                Config.visuals.outline.line_and_flags = TimMenu.Checkbox("Line & Flags Outline",
+                -- Outline Settings
+                TimMenu.BeginSector("Outlines")
+                Config.visuals.outline.line_and_flags = TimMenu.Checkbox("Line Outline",
                     Config.visuals.outline.line_and_flags)
-                TimMenu.NextLine()
-
                 Config.visuals.outline.polygon = TimMenu.Checkbox("Polygon Outline", Config.visuals.outline.polygon)
-                TimMenu.NextLine()
 
-                TimMenu.Text("Outline Colors:")
-                Config.visuals.outline.r = TimMenu.Slider("R", Config.visuals.outline.r, 0, 255, 1)
-                TimMenu.SameLine()
-                Config.visuals.outline.g = TimMenu.Slider("G", Config.visuals.outline.g, 0, 255, 1)
-                TimMenu.NextLine()
-                Config.visuals.outline.b = TimMenu.Slider("B", Config.visuals.outline.b, 0, 255, 1)
-                TimMenu.SameLine()
-                Config.visuals.outline.a = TimMenu.Slider("A", Config.visuals.outline.a, 0, 255, 1)
-                TimMenu.NextLine()
+                if Config.visuals.outline.line_and_flags or Config.visuals.outline.polygon then
+                    TimMenu.NextLine()
+                    Config.visuals.outline.r = TimMenu.Slider("Red", Config.visuals.outline.r, 0, 255, 1)
+                    Config.visuals.outline.g = TimMenu.Slider("Green", Config.visuals.outline.g, 0, 255, 1)
+                    TimMenu.NextLine()
+                    Config.visuals.outline.b = TimMenu.Slider("Blue", Config.visuals.outline.b, 0, 255, 1)
+                    Config.visuals.outline.a = TimMenu.Slider("Alpha", Config.visuals.outline.a, 0, 255, 1)
+                end
                 TimMenu.EndSector()
             end
         end
