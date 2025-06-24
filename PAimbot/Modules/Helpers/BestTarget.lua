@@ -57,16 +57,28 @@ local function CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewA
     -- FOV factor (smaller FOV is much better)
     local fovFactor = Common.Math.RemapValClamped(fov, 0, Config.main.aimfov, 1.0, 0.3)
 
-    -- Visibility factor (MASSIVELY prioritize visible targets - 100x penalty for hidden)
+    -- Visibility check
     local isVisible = Common.Helpers.VisPos(player, localPlayerOrigin + eyeOffset, playerOrigin + eyeOffset)
-    local visibilityFactor = isVisible and 1.0 or 0.01 -- 100x penalty for targets behind walls
+
+    -- Targeting mode handling
+    local visibilityFactor = 1.0
+    if Config.advanced.targetingMode.legit then
+        -- Legit mode: Only target visible enemies
+        if not isVisible then
+            return 0 -- Completely exclude invisible targets in legit mode
+        end
+        visibilityFactor = 1.0
+    else
+        -- Blatant mode: Allow hidden targets but prefer visible ones
+        visibilityFactor = isVisible and 1.0 or 0.3 -- 70% penalty for hidden targets
+    end
 
     -- Health factor (lower health = higher priority)
     local health = player:GetHealth()
     local maxHealth = player:GetMaxHealth()
     local healthFactor = Common.Math.RemapValClamped(health, 0, maxHealth, 1.2, 0.8)
 
-    -- Movement predictability from history (if available) - with trust factor scaling
+    -- Movement predictability from history (if available)
     local predictabilityFactor = 1.0
     local playerIndex = player:GetIndex()
     if G.predictionDelta[playerIndex] and G.predictionDelta[playerIndex].entropy then
@@ -74,28 +86,20 @@ local function CalculateTargetFactor(player, localPlayerOrigin, localPlayerViewA
         local trustFactor = G.predictionDelta[playerIndex].trustFactor or 0.0
 
         -- Only apply entropy penalty when we have sufficient trust in the data
-        local entropyPenalty = entropy * (0.2 + trustFactor * 0.3) -- 0.2-0.5 penalty based on trust
+        local entropyPenalty = entropy * (0.1 + trustFactor * 0.2) -- 0.1-0.3 penalty based on trust
         predictabilityFactor = 1.0 - entropyPenalty
 
         -- Bonus for high trust factor (reliable data)
-        local trustBonus = trustFactor * 0.15
+        local trustBonus = trustFactor * 0.1
         predictabilityFactor = predictabilityFactor + trustBonus
     end
 
-    -- Hit chance factor (easier targets get slight preference)
-    local hitChanceFactor = 1.0
-    if Config.main.enable then                                                       -- Only calculate hit chance if aimbot is enabled
-        local hitChance = BestTarget.CalculateHitChance(player, 10)                  -- Quick 10-tick prediction
-        hitChanceFactor = Common.Math.RemapValClamped(hitChance, 20, 90, 0.85, 1.15) -- 15% range around 1.0
-    end
-
-    -- Combine factors with sophisticated weighting
-    local totalFactor = (distanceFactor * 0.22 + -- Distance: 22%
-        fovFactor * 0.30 +                       -- FOV: 30%
-        visibilityFactor * 0.30 +                -- Visibility: 30%
-        healthFactor * 0.08 +                    -- Health: 8%
-        predictabilityFactor * 0.05 +            -- Predictability: 5%
-        hitChanceFactor * 0.05)                  -- Hit Chance: 5% (about 1/6th of FOV as requested)
+    -- Combine factors with weighting (removed hitchance factor)
+    local totalFactor = (distanceFactor * 0.25 + -- Distance: 25%
+        fovFactor * 0.40 +                       -- FOV: 40%
+        visibilityFactor * 0.25 +                -- Visibility: 25%
+        healthFactor * 0.05 +                    -- Health: 5%
+        predictabilityFactor * 0.05)             -- Predictability: 5%
 
     return totalFactor
 end
@@ -307,6 +311,7 @@ end
 
 -- Enhanced history update for configurable number of targets (4-8)
 function BestTarget.UpdateHistory(me)
+    local HistoryHandler = require("PAimbot.Modules.Prediction.HistoryHandler")
     local players = FastPlayers.GetEnemies()
     local localPlayerOrigin = me:GetAbsOrigin()
     local topTargets = {}
@@ -332,39 +337,37 @@ function BestTarget.UpdateHistory(me)
         table.remove(topTargets)
     end
 
-    -- Get the list of top players
-    local topPlayers = {}
+    -- Get the list of top players for clearing
+    local topPlayerIndices = {}
     for _, target in ipairs(topTargets) do
         local player = target.player
         local playerIndex = player:GetIndex()
+        topPlayerIndices[playerIndex] = true
 
-        table.insert(topPlayers, playerIndex)
-
-        -- Update the history for the top players
-        HistoryHandler:update(player, topPlayers)
-
-        -- Calculate the weighted deltas from the history
-        local weightedStrafeDelta, weightedAccelDelta = HistoryHandler:getWeightedDeltas(player)
-
-        -- Store the calculated deltas in G.predictionDelta without overwriting the history
-        G.predictionDelta[playerIndex] = G.predictionDelta[playerIndex] or {}
-        G.predictionDelta[playerIndex].strafeDelta = weightedStrafeDelta
-        G.predictionDelta[playerIndex].accelDelta = weightedAccelDelta
+        -- Update the history for this specific target using the new method
+        HistoryHandler:updateTarget(player)
     end
 
     -- Clear history for any player not in the top targets
     for _, player in pairs(players) do
         local playerRaw = player._rawEntity
-        if not TableContains(topPlayers, playerRaw:GetIndex()) then
-            HistoryHandler:clearHistory(playerRaw)
+        local playerIndex = playerRaw:GetIndex()
+        if not topPlayerIndices[playerIndex] then
+            -- Clear history for non-tracked players using the new method
+            HistoryHandler:clearTarget(playerRaw)
+
             -- Clear prediction data for non-tracked players
-            if G.predictionDelta[playerRaw:GetIndex()] then
-                G.predictionDelta[playerRaw:GetIndex()] = nil
+            if G.predictionDelta[playerIndex] then
+                G.predictionDelta[playerIndex] = nil
             end
         end
     end
 
     -- Return the top players for reference
+    local topPlayers = {}
+    for _, target in ipairs(topTargets) do
+        table.insert(topPlayers, target.player:GetIndex())
+    end
     return topPlayers
 end
 

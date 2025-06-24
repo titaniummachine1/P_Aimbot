@@ -36,19 +36,15 @@ local defaultConfig = {
         splashPrediction = true,
         splashAccuracy = 4,
         predTicks = 77,
-        historyTicks = 66,
-        hitchanceAccuracy = 10,
-        accuracyWeight = 5,
-        strafePrediction = true,
-        strafeSamples = 4,
+        historyLengthTicks = 44, -- Reduced from 66 to 20 for much better performance
         -- 0.5 to 8, determines the size of the segments traced; lower values = worse performance (default 2.5)
         projectileSegments = 10,
         maxPredictionTicks = 132,
         maxTargetsToPredict = 4,
         maxTrackedTargets = 8, -- Number of targets to track for history/entropy (4-8)
-        aimModes = {
-            leading = true,
-            trailing = false,
+        targetingMode = {
+            legit = true,      -- Only shoot at visible targets (legit mode)
+            blatant = false,   -- Allow shooting at hidden targets (blatant mode)
         },
     },
     visuals = {

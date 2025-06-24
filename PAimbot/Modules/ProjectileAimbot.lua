@@ -341,6 +341,10 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local basePos = player:GetAbsOrigin()
     local baseVel = player:EstimateAbsVelocity()
 
+    -- Use enhanced motion data from HistoryHandler if available
+    local playerIndex = player:GetIndex()
+    local motionData = G.history[playerIndex]
+
     -- Compensate for network lag by advancing position to real-time
     local lastP = basePos + baseVel * latency
     local lastV = baseVel
@@ -372,9 +376,9 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
     local totalHitChance = 0
     local tickCount = 0
 
-    -- Apply strafe prediction if enabled
+    -- Apply strafe prediction (now always enabled)
     local strafeAngle = nil
-    if Config.advanced.strafePrediction and G.predictionDelta[playerIndex] then
+    if G.predictionDelta[playerIndex] then
         strafeAngle = G.predictionDelta[playerIndex].strafeDelta
     end
 
@@ -384,11 +388,22 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
         local vel = lastV
         local onGround = lastG
 
-        -- Apply strafeAngle
-        if strafeAngle then
+        -- Apply enhanced strafe prediction using motion data
+        if motionData and motionData.strafeDelta ~= 0 then
+            local strafeInfluence = motionData.strafeDelta
+            -- Scale strafe influence by predictability (less predictable = less influence)
+            if motionData.predictabilityScore then
+                strafeInfluence = strafeInfluence * (1.0 - motionData.predictabilityScore * 0.5)
+            end
+
             local ang = vel:Angles()
-            ang.y = ang.y + strafeAngle
+            ang.y = ang.y + strafeInfluence
             vel = ang:Forward() * vel:Length()
+        end
+
+        -- Apply acceleration and jerk if available
+        if motionData and motionData.acceleration then
+            vel = vel + motionData.acceleration * tick_interval
         end
 
         -- Forward Collision
@@ -438,7 +453,7 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
             table.insert(G.HitChanceData.hitChanceRecords[playerIndex], hitChance1)
 
             -- Ensure the number of records does not exceed the maximum allowed
-            local maxRecords = Config.advanced.hitchanceAccuracy or 66
+            local maxRecords = 66                                              -- Default max records
             if #G.HitChanceData.hitChanceRecords[playerIndex] > maxRecords then
                 table.remove(G.HitChanceData.hitChanceRecords[playerIndex], 1) -- Remove the oldest record
             end
@@ -499,8 +514,9 @@ function ProjectileAimbot.CheckProjectileTarget(me, weapon, player)
 
     -- Calculate trust factor based on the number of records
     local numRecords = #G.HitChanceData.hitChanceRecords[playerIndex]
-    local growthRate = Config.advanced.accuracyWeight or 5
-    local trustFactor = calculateTrustFactor(numRecords, Config.advanced.hitchanceAccuracy or 66, growthRate)
+    local growthRate = 5  -- Default growth rate (was Config.advanced.accuracyWeight)
+    local maxRecords = 66 -- Default max records (was Config.advanced.hitchanceAccuracy)
+    local trustFactor = calculateTrustFactor(numRecords, maxRecords, growthRate)
 
     -- Adjust the average hit chance based on trust factor
     G.Aimbot.HitChance = calculateAdjustedHitChance(G.Aimbot.HitChance, trustFactor)
@@ -572,6 +588,184 @@ function ProjectileAimbot.Run(userCmd)
             userCmd.buttons = userCmd.buttons | IN_ATTACK
         end
     end
+end
+
+-- Direct aimbot function (skip hitchance checks when player is actively shooting)
+function ProjectileAimbot.RunDirect(userCmd)
+    local me = entities.GetLocalPlayer()
+    local weapon = me:GetPropEntity("m_hActiveWeapon")
+
+    ProjectileAimbot.UpdateLatency()
+
+    local currentTarget = BestTarget.Get()
+    if not currentTarget then
+        return
+    end
+
+    -- Skip hitchance validation for direct shooting
+    local aimResult = ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, currentTarget)
+    if not aimResult then
+        return
+    end
+
+    -- Store current target
+    G.Aimbot.Target = currentTarget
+    G.Aimbot.CurrentAngles = aimResult.angles
+
+    -- Apply aim immediately
+    userCmd:SetViewAngles(aimResult.angles:Unpack())
+    if not Config.main.silent then
+        engine.SetViewAngles(aimResult.angles)
+    end
+end
+
+-- Direct target checking (skip hitchance validation)
+function ProjectileAimbot.CheckProjectileTargetDirect(me, weapon, player)
+    local tick_interval = TickInterval()
+    local shootPos = me:GetAbsOrigin() + me:GetPropVector("localdata", "m_vecViewOffset[0]")
+    local aimPos = player:GetAbsOrigin() + Vector3(0, 0, 10)
+    local aimOffset = aimPos - player:GetAbsOrigin()
+    local gravity = client.GetConVar("sv_gravity")
+    local stepSize = player:GetPropFloat("localdata", "m_flStepSize")
+    local vStep = Vector3(0, 0, stepSize / 2)
+    local vPath = {}
+
+    -- Start with lag-compensated real-time position
+    local latency = G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+    local basePos = player:GetAbsOrigin()
+    local baseVel = player:EstimateAbsVelocity()
+
+    -- Use enhanced motion data from HistoryHandler if available
+    local playerIndex = player:GetIndex()
+    local motionData = G.history[playerIndex]
+    local strafeAngle = motionData and motionData.strafeDelta or 0
+
+    -- Compensate for network lag by advancing position to real-time
+    local lastP = basePos + baseVel * latency
+    local lastV = baseVel
+    local lastG = Common.IsOnGround(player)
+    local shouldHitEntity = function(entity)
+        return entity:GetIndex() ~= player:GetIndex() or entity:GetTeamNumber() ~= player:GetTeamNumber()
+    end
+    local vHitbox = { Vector3(-22, -22, 0), Vector3(22, 22, 80) }
+
+    -- Check initial conditions
+    local projData = ProjectileData.GetProjectileData(me, weapon)
+    if not projData or not gravity or not stepSize then return nil end
+
+    local PredTicks = Config.advanced.maxPredictionTicks or 77
+    local speed = projData.Speed
+
+    -- Early distance check
+    if (me:GetAbsOrigin() - player:GetAbsOrigin()):Length() > PredTicks * speed then return nil end
+
+    local targetAngles
+
+    -- Enhanced prediction using motion data
+    for i = 1, PredTicks do
+        local pos = lastP + lastV * tick_interval
+        local vel = lastV
+        local onGround = lastG
+
+        -- Apply enhanced strafe prediction using motion data
+        if motionData and motionData.strafeDelta ~= 0 then
+            local strafeInfluence = motionData.strafeDelta
+            -- Scale strafe influence by predictability (less predictable = less influence)
+            if motionData.predictabilityScore then
+                strafeInfluence = strafeInfluence * (1.0 - motionData.predictabilityScore * 0.5)
+            end
+
+            local ang = vel:Angles()
+            ang.y = ang.y + strafeInfluence
+            vel = ang:Forward() * vel:Length()
+        end
+
+        -- Apply acceleration and jerk if available
+        if motionData and motionData.acceleration then
+            vel = vel + motionData.acceleration * tick_interval
+        end
+
+        -- Forward Collision
+        local wallTrace = TraceHull(lastP + vStep, pos + vStep, vHitbox[1], vHitbox[2], G.Constants.MASK_PLAYERSOLID,
+            shouldHitEntity)
+        if wallTrace.fraction < 1 then
+            pos.x, pos.y = handleForwardCollision(vel, wallTrace)
+        end
+
+        -- Ground Collision
+        local downStep = onGround and vStep or Vector3()
+        local groundTrace = TraceHull(pos + vStep, pos - downStep, vHitbox[1], vHitbox[2], G.Constants.MASK_PLAYERSOLID,
+            shouldHitEntity)
+        if groundTrace.fraction < 1 then
+            pos, onGround = handleGroundCollision(vel, groundTrace)
+        else
+            onGround = false
+        end
+
+        -- Apply gravity if not on ground
+        if not onGround then
+            vel.z = vel.z - gravity * tick_interval
+        end
+
+        lastP, lastV, lastG = pos, vel, onGround
+
+        -- Projectile Targeting Logic
+        pos = lastP + aimOffset
+        vPath[i] = pos
+
+        -- Solve the projectile based on the current position (no hitchance validation)
+        local solution = SolveProjectile(shootPos, pos, projData.Speed, projData.Gravity, gravity, player,
+            PredTicks * tick_interval)
+        if solution == nil then goto continue end
+
+        if not solution then
+            -- Try splash prediction for hidden targets if enabled
+            if Config.advanced.splashPrediction and projData.Gravity == 0 then
+                local splashPos = FindBestSplashPosition(shootPos, pos, player)
+                if splashPos then
+                    solution = SolveProjectile(shootPos, splashPos, projData.Speed, projData.Gravity, gravity, player,
+                        PredTicks * tick_interval)
+                    if solution then
+                        G.Aimbot.IsSplashShot = true
+                    end
+                end
+            end
+
+            if not solution then
+                goto continue
+            end
+        else
+            G.Aimbot.IsSplashShot = false
+        end
+
+        local time
+        if solution and solution.time then
+            time = solution.time + G.Aimbot.LatencyData.latency + G.Aimbot.LatencyData.lerp
+        else
+            goto continue
+        end
+
+        local ticks = Common.TimeToTicks(time) + 1
+        if ticks > i then goto continue end
+
+        targetAngles = solution.angles
+        break
+        ::continue::
+    end
+
+    -- Store trajectory path for visuals
+    G.Aimbot.TargetPredictionPath = vPath
+
+    if not targetAngles or (player:GetAbsOrigin() - me:GetAbsOrigin()):Length() < Config.main.minDistance then
+        return nil
+    end
+
+    return {
+        entity = player,
+        angles = targetAngles,
+        factor = 0,
+        Prediction = vPath[#vPath]
+    }
 end
 
 return ProjectileAimbot

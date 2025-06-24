@@ -425,10 +425,16 @@ function Prediction:update(player)
         return shouldHitEntityFun(entity, player)
     end
 
-    -- Get strafe delta from history
+    -- Get enhanced motion data from history
     local playerIndex = player:GetIndex()
-    local predictionDelta = G.history[playerIndex] or { strafeDelta = 0 }
-    self.deltaStrafe = predictionDelta.strafeDelta
+    local motionData = G.history[playerIndex] or {
+        strafeDelta = 0,
+        acceleration = Vector3(0, 0, 0),
+        jerk = Vector3(0, 0, 0),
+        predictabilityScore = 1.0
+    }
+    self.deltaStrafe = motionData.strafeDelta
+    self.motionData = motionData
 
     -- Store player reference for advanced prediction
     self.player = player
@@ -468,10 +474,23 @@ function Prediction:predictTick()
         vel.z = self.terminalVelocity
     end
 
-    -- Update strafe based on history (simulate continuous strafing)
-    if self.deltaStrafe and self.deltaStrafe ~= 0 then
-        self.accumulatedStrafe = self.accumulatedStrafe + self.deltaStrafe
+    -- Update strafe based on enhanced motion data (simulate continuous strafing)
+    if self.motionData and self.motionData.strafeDelta ~= 0 then
+        local strafeInfluence = self.motionData.strafeDelta
+
+        -- Scale strafe influence by predictability (less predictable = less influence)
+        if self.motionData.predictabilityScore then
+            strafeInfluence = strafeInfluence * (1.0 - self.motionData.predictabilityScore * 0.3)
+        end
+
+        self.accumulatedStrafe = self.accumulatedStrafe + strafeInfluence
         self.moveIntent = Common.RotateVector(self.initialMoveIntent, self.accumulatedStrafe)
+    end
+
+    -- Apply acceleration and jerk if available in motion data
+    if self.motionData and self.motionData.acceleration then
+        -- Apply a small portion of acceleration to the velocity prediction
+        vel = vel + self.motionData.acceleration * dt * 0.1 -- Scale down to avoid overshooting
     end
 
     -- Get desired horizontal movement direction

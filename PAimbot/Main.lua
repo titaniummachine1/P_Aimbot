@@ -54,33 +54,150 @@ local function GetSimpleTarget(pLocal)
     return nil
 end
 
+-- Check if player is actively trying to shoot (not just aim key pressed)
+local function IsPlayerShooting(userCmd)
+    if not userCmd then return false end
+    return (userCmd:GetButtons() & IN_ATTACK) ~= 0
+end
+
+-- Calculate improved predictability-based hitchance using motion derivatives
+local function CalculatePredictabilityHitchance(player)
+    if not player then return 0 end
+
+    local playerIndex = player:GetIndex()
+    local history = G.history[playerIndex]
+
+    if not history then return 0 end
+
+    -- Start at 100% hitchance and decrease based on motion unpredictability
+    local hitchance = 100.0
+
+    -- Get motion derivative values from history
+    local acceleration = history.acceleration or Vector3(0, 0, 0)
+    local jerk = history.jerk or Vector3(0, 0, 0)
+    local snap = history.snap or Vector3(0, 0, 0)
+    local pop = history.pop or Vector3(0, 0, 0)
+    local strafeDelta = history.strafeDelta or 0
+
+    -- Calculate motion magnitudes (deviations from linear motion)
+    local accelMagnitude = acceleration:Length()
+    local jerkMagnitude = jerk:Length()
+    local snapMagnitude = snap:Length()
+    local popMagnitude = pop:Length()
+    local strafeMagnitude = math.abs(strafeDelta)
+
+    -- Apply penalties based on motion unpredictability (most to least important)
+    -- Acceleration is most important (40% max penalty)
+    if accelMagnitude > 5 then
+        local accelPenalty = math.min(40, accelMagnitude * 2)
+        hitchance = hitchance - accelPenalty
+    end
+
+    -- Jerk (rate of acceleration change) is very important (30% max penalty)
+    if jerkMagnitude > 10 then
+        local jerkPenalty = math.min(30, jerkMagnitude * 1.5)
+        hitchance = hitchance - jerkPenalty
+    end
+
+    -- Strafe delta is important for direction changes (20% max penalty)
+    if strafeMagnitude > 2 then
+        local strafePenalty = math.min(20, strafeMagnitude * 5)
+        hitchance = hitchance - strafePenalty
+    end
+
+    -- Snap (rate of jerk change) is less important (15% max penalty)
+    if snapMagnitude > 20 then
+        local snapPenalty = math.min(15, snapMagnitude * 0.5)
+        hitchance = hitchance - snapPenalty
+    end
+
+    -- Pop (rate of snap change) is least important (10% max penalty)
+    if popMagnitude > 30 then
+        local popPenalty = math.min(10, popMagnitude * 0.25)
+        hitchance = hitchance - popPenalty
+    end
+
+    -- Ensure hitchance doesn't go below 0
+    hitchance = math.max(0, hitchance)
+
+    -- Store detailed motion data for status display
+    G.Aimbot.MotionAnalysis = {
+        acceleration = accelMagnitude,
+        jerk = jerkMagnitude,
+        snap = snapMagnitude,
+        pop = popMagnitude,
+        strafe = strafeMagnitude,
+        hitchance = hitchance
+    }
+
+    return hitchance
+end
+
+-- Real prediction for visuals when player is predictable enough
+local function GetRealPrediction(player, maxTicks)
+    if not player then return nil end
+
+    -- Update prediction system with current player
+    Prediction:update(player)
+
+    -- Build prediction path tick by tick
+    local predictionPath = {}
+    local currentState = Prediction:predict(0) -- Get current state
+
+    if currentState and currentState.pos then
+        table.insert(predictionPath, currentState.pos)
+
+        -- Predict forward tick by tick
+        for tick = 1, maxTicks do
+            local nextState = Prediction:predictTick()
+            if nextState and nextState.pos then
+                table.insert(predictionPath, nextState.pos)
+            else
+                break
+            end
+        end
+    end
+
+    return predictionPath
+end
+
 -- History update (history stored every tick, heavy calculations limited)
 local lastPredictionUpdate = 0
 local function Main()
     local pLocal = FastPlayers.GetLocal()
     if not pLocal or not pLocal:IsAlive() or pLocal:InCond(7) then return end
 
-    -- ALWAYS update history every tick (essential for accurate tracking)
-    HistoryHandler:update()
-
-    -- Only run heavy prediction calculations when needed
+    -- Only run any calculations if aimbot is enabled
     if not Config.main.enable then
         return
     end
 
-    -- Limit heavy prediction updates to every 3 ticks for performance
-    local currentTick = globals.TickCount()
-    if currentTick - lastPredictionUpdate < 3 then
-        return
-    end
-    lastPredictionUpdate = currentTick
+    -- ALWAYS update history for the 8 best targets (constantly track them for immediate accuracy)
+    BestTarget.UpdateHistory(pLocal._rawEntity)
 
-    -- Only update prediction when aiming or when we need visuals
-    if input.IsButtonDown(Config.main.aimKey.key) or Config.visuals.active then
-        -- Only update prediction for current target if one exists
-        if G.Target then
-            Prediction:update(G.Target)
+    -- Always find best target when aimbot is enabled for visuals
+    local currentTarget = BestTarget.Get()
+    G.Target = currentTarget -- Store for visuals
+
+    -- When aim key is pressed, show target prediction visuals
+    if input.IsButtonDown(Config.main.aimKey.key) then
+        if currentTarget then
+            -- Calculate predictability-based hitchance for display purposes
+            local predictabilityHitchance = CalculatePredictabilityHitchance(currentTarget)
+            G.Aimbot.PredictabilityHitchance = predictabilityHitchance -- Store for visuals/debug
+
+            -- Always show real prediction when aiming (for visuals)
+            local fullPredTicks = Config.advanced.predTicks or 77
+            local predictionPath = GetRealPrediction(currentTarget, fullPredTicks)
+            if predictionPath then
+                G.Aimbot.TargetPredictionPath = predictionPath
+            end
         end
+    end
+
+    -- Update prediction for visuals if enabled
+    if Config.visuals.active and currentTarget then
+        Prediction:update(currentTarget)
     end
 end
 
@@ -101,8 +218,52 @@ local function OnCreateMove(userCmd)
     local projType = weapon:GetWeaponProjectileType()
     if not projType or projType <= 1 then return end
 
-    -- Run the aimbot
-    ProjectileAimbot.Run(userCmd)
+    -- Check if player is actively shooting vs just aiming
+    local isActivelyShooting = IsPlayerShooting(userCmd)
+
+    -- Always try to run the aimbot to get accurate hitchance calculation
+    ProjectileAimbot.UpdateLatency()
+    local currentTarget = BestTarget.Get()
+    if not currentTarget then
+        return
+    end
+
+    -- Run full projectile calculation to get real hitchance
+    local aimResult = ProjectileAimbot.CheckProjectileTarget(me, weapon, currentTarget)
+    if not aimResult then
+        return -- No valid solution found
+    end
+
+    -- Store current target and angles
+    G.Aimbot.Target = currentTarget
+    G.Aimbot.CurrentAngles = aimResult.angles
+
+    -- Apply aim
+    userCmd:SetViewAngles(aimResult.angles:Unpack())
+    if not Config.main.silent then
+        engine.SetViewAngles(aimResult.angles)
+    end
+
+    -- Determine if we should shoot based on:
+    -- 1. Player actively shooting (+attack), OR
+    -- 2. Auto-shoot enabled AND hitchance threshold met
+    local actualHitchance = G.Aimbot.HitChance or 0
+    local shouldAutoShoot = Config.main.autoShoot and actualHitchance >= Config.main.minHitchance
+
+    if isActivelyShooting or shouldAutoShoot then
+        -- Auto shoot logic
+        if weapon:GetWeaponID() == TF_WEAPON_COMPOUND_BOW then
+            local chargeBeginTime = weapon:GetPropFloat("PipebombLauncherLocalData", "m_flChargeBeginTime") or 0
+            if chargeBeginTime > 0 then
+                userCmd.buttons = userCmd.buttons & ~IN_ATTACK
+            else
+                userCmd.buttons = userCmd.buttons | IN_ATTACK
+            end
+        else
+            -- Normal weapon - shoot
+            userCmd.buttons = userCmd.buttons | IN_ATTACK
+        end
+    end
 end
 
 -- Save config on unload

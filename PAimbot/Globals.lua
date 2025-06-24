@@ -18,6 +18,17 @@ G.Aimbot = {
     Target = nil,
     CurrentAngles = nil,
     HitChance = 0,
+    PredictabilityHitchance = 0, -- Hitchance based on motion predictability
+    CanEngage = false,           -- Whether aimbot can engage based on predictability
+    ReadyToShoot = false,        -- Whether we're ready to shoot (aim key + predictable target)
+    MotionAnalysis = {           -- Detailed motion analysis for current target
+        acceleration = 0,
+        jerk = 0,
+        snap = 0,
+        pop = 0,
+        strafe = 0,
+        hitchance = 0
+    },
     ProjectilePath = {},
     TargetPredictionPath = {},
     LatencyData = {

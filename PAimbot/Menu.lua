@@ -75,6 +75,8 @@ local function DrawMenu()
 
         -- Main Tab
         if Config.menu.tabs.main then
+            -- Core Settings Section
+            TimMenu.BeginSector("Core Settings")
             Config.main.enable = TimMenu.Checkbox("Enable Aimbot", Config.main.enable)
             TimMenu.NextLine()
 
@@ -84,7 +86,14 @@ local function DrawMenu()
 
                 Config.main.autoShoot = TimMenu.Checkbox("Auto Shoot", Config.main.autoShoot)
                 TimMenu.NextLine()
+            end
+            TimMenu.EndSector()
 
+            if Config.main.enable then
+                TimMenu.NextLine()
+
+                -- Targeting Settings Section
+                TimMenu.BeginSector("Targeting Settings")
                 Config.main.aimfov = TimMenu.Slider("Aim FOV", Config.main.aimfov, 0.1, 360, 0.1)
                 TimMenu.NextLine()
 
@@ -99,49 +108,87 @@ local function DrawMenu()
 
                 Config.main.aimKey.key = TimMenu.Keybind("Aim Key", Config.main.aimKey.key)
                 TimMenu.NextLine()
+                TimMenu.EndSector()
+
+                TimMenu.NextLine()
+
+                -- Status Information Section
+                TimMenu.BeginSector("Status Information")
+                -- Display detailed motion analysis and predictability
+                if G.Aimbot and G.Aimbot.MotionAnalysis then
+                    local motion = G.Aimbot.MotionAnalysis
+                    local predictabilityHitchance = G.Aimbot.PredictabilityHitchance or 0
+                    local actualHitchance = G.Aimbot.HitChance or 0
+
+                    TimMenu.Text(string.format("Predictability HC: %.1f%% | Actual HC: %.1f%%",
+                        predictabilityHitchance, actualHitchance))
+                    TimMenu.NextLine()
+
+                    TimMenu.Text("Motion Analysis (current target):")
+                    TimMenu.NextLine()
+
+                    TimMenu.Text(string.format("Acceleration: %.1f | Jerk: %.1f",
+                        motion.acceleration, motion.jerk))
+                    TimMenu.NextLine()
+
+                    TimMenu.Text(string.format("Snap: %.1f | Pop: %.1f | Strafe: %.1f",
+                        motion.snap, motion.pop, motion.strafe))
+                    TimMenu.NextLine()
+                else
+                    TimMenu.Text("No target selected")
+                    TimMenu.NextLine()
+                end
+                TimMenu.EndSector()
             end
         end
 
-        -- Advanced Tab with Sectors
+        -- Advanced Tab with better organization
         if Config.menu.tabs.advanced then
-            -- Left Sector
-            TimMenu.BeginSector("Prediction Settings")
-            Config.advanced.strafePrediction = TimMenu.Checkbox("Strafe Prediction", Config.advanced.strafePrediction)
+            -- Targeting Mode Section
+            TimMenu.BeginSector("Targeting Mode")
+            TimMenu.Text("Select targeting behavior:")
+            local targetingModes = { "Legit", "Blatant" }
+            local currentMode = Config.advanced.targetingMode.legit and 1 or 2
+            local selectedMode = TimMenu.TabControl("targeting_modes", targetingModes, currentMode)
+
+            -- Update targeting mode based on selection
+            Config.advanced.targetingMode.legit = (selectedMode == 1)
+            Config.advanced.targetingMode.blatant = (selectedMode == 2)
+
             TimMenu.NextLine()
-
-            Config.advanced.splashPrediction = TimMenu.Checkbox("Splash Prediction", Config.advanced.splashPrediction)
-            TimMenu.NextLine()
-
-            if Config.advanced.splashPrediction then
-                Config.advanced.splashAccuracy = TimMenu.Slider("Splash Accuracy", Config.advanced.splashAccuracy, 2, 20,
-                    1)
-                TimMenu.NextLine()
+            if Config.advanced.targetingMode.legit then
+                TimMenu.Text("Legit: Only targets visible enemies")
+            else
+                TimMenu.Text("Blatant: Can target enemies behind walls")
             end
-
-            if Config.advanced.strafePrediction then
-                Config.advanced.strafeSamples = TimMenu.Slider("Strafe Samples", Config.advanced.strafeSamples, 2, 20, 1)
-                TimMenu.NextLine()
-            end
-
-            Config.advanced.predTicks = TimMenu.Slider("Prediction Ticks", Config.advanced.predTicks, 1, 200, 1)
             TimMenu.NextLine()
             TimMenu.EndSector()
 
-            -- Right Sector
-            TimMenu.BeginSector("Performance Settings")
-            Config.advanced.hitchanceAccuracy = TimMenu.Slider("Hit Chance Accuracy", Config.advanced.hitchanceAccuracy,
-                1, Config.advanced.predTicks, 1)
             TimMenu.NextLine()
 
-            Config.advanced.accuracyWeight = TimMenu.Slider("Accuracy Weight", Config.advanced.accuracyWeight, 1, 10, 1)
+            -- Prediction Settings Section
+            TimMenu.BeginSector("Prediction Settings")
+            TimMenu.Text("Strafe Prediction: Always Enabled")
             TimMenu.NextLine()
 
-            Config.advanced.projectileSegments = TimMenu.Slider("Projectile Segments", Config.advanced
-                .projectileSegments, 3, 50, 1)
+            Config.advanced.historyLengthTicks = TimMenu.Slider("History Length (Ticks)",
+                Config.advanced.historyLengthTicks, 10, 500, 1)
+            TimMenu.NextLine()
+
+            Config.advanced.predTicks = TimMenu.Slider("Prediction Ticks", Config.advanced.predTicks, 1, 200, 1)
             TimMenu.NextLine()
 
             Config.advanced.maxPredictionTicks = TimMenu.Slider("Max Prediction Ticks",
                 Config.advanced.maxPredictionTicks or 132, 10, 300, 1)
+            TimMenu.NextLine()
+            TimMenu.EndSector()
+
+            TimMenu.NextLine()
+
+            -- Performance Settings Section
+            TimMenu.BeginSector("Performance Settings")
+            Config.advanced.projectileSegments = TimMenu.Slider("Projectile Segments", Config.advanced
+                .projectileSegments, 3, 50, 1)
             TimMenu.NextLine()
 
             Config.advanced.maxTargetsToPredict = TimMenu.Slider("Max Targets to Predict",
@@ -154,10 +201,27 @@ local function DrawMenu()
             TimMenu.EndSector()
 
             TimMenu.NextLine()
+
+            -- Splash Prediction Section
+            TimMenu.BeginSector("Splash Prediction")
+            Config.advanced.splashPrediction = TimMenu.Checkbox("Enable Splash Prediction",
+                Config.advanced.splashPrediction)
+            TimMenu.NextLine()
+
+            if Config.advanced.splashPrediction then
+                Config.advanced.splashAccuracy = TimMenu.Slider("Splash Accuracy", Config.advanced.splashAccuracy, 2, 20,
+                    1)
+                TimMenu.NextLine()
+            end
+            TimMenu.EndSector()
+
+            TimMenu.NextLine()
         end
 
         -- Visuals Tab
         if Config.menu.tabs.visuals then
+            -- Main Visual Settings (Left Column)
+            TimMenu.BeginSector("Visual Settings")
             Config.visuals.active = TimMenu.Checkbox("Enable Visuals", Config.visuals.active)
             TimMenu.NextLine()
 
@@ -189,52 +253,79 @@ local function DrawMenu()
                         Config.visuals.path_styles_selected, Config.visuals.path_styles)
                     TimMenu.NextLine()
                 end
+            end
+            TimMenu.EndSector()
 
-                TimMenu.Separator()
-                TimMenu.NextLine()
-
-                -- Polygon settings
-                Config.visuals.polygon.enabled = TimMenu.Checkbox("Impact Polygon", Config.visuals.polygon.enabled)
+            if Config.visuals.active then
+                -- Impact Polygon Settings (Right Column)
+                TimMenu.SameLine()
+                TimMenu.BeginSector("Impact Polygon")
+                Config.visuals.polygon.enabled = TimMenu.Checkbox("Enable Impact Polygon", Config.visuals.polygon
+                    .enabled)
                 TimMenu.NextLine()
 
                 if Config.visuals.polygon.enabled then
-                    Config.visuals.polygon.size = TimMenu.Slider("Polygon Size", Config.visuals.polygon.size, 5, 50, 1)
+                    Config.visuals.polygon.size = TimMenu.Slider("Size", Config.visuals.polygon.size, 5, 50, 1)
                     TimMenu.NextLine()
 
-                    Config.visuals.polygon.segments = TimMenu.Slider("Polygon Segments", Config.visuals.polygon.segments,
-                        8, 32, 1)
+                    Config.visuals.polygon.segments = TimMenu.Slider("Segments", Config.visuals.polygon.segments, 8, 32,
+                        1)
                     TimMenu.NextLine()
 
-                    Config.visuals.polygon.r = TimMenu.Slider("Polygon Red", Config.visuals.polygon.r, 0, 255, 1)
+                    -- Polygon Colors (very compact - 2 sliders per line)
+                    TimMenu.Text("Polygon Colors:")
+                    Config.visuals.polygon.r = TimMenu.Slider("R", Config.visuals.polygon.r, 0, 255, 1)
+                    TimMenu.SameLine()
+                    Config.visuals.polygon.g = TimMenu.Slider("G", Config.visuals.polygon.g, 0, 255, 1)
                     TimMenu.NextLine()
-
-                    Config.visuals.polygon.g = TimMenu.Slider("Polygon Green", Config.visuals.polygon.g, 0, 255, 1)
-                    TimMenu.NextLine()
-
-                    Config.visuals.polygon.b = TimMenu.Slider("Polygon Blue", Config.visuals.polygon.b, 0, 255, 1)
-                    TimMenu.NextLine()
-
-                    Config.visuals.polygon.a = TimMenu.Slider("Polygon Alpha", Config.visuals.polygon.a, 0, 255, 1)
+                    Config.visuals.polygon.b = TimMenu.Slider("B", Config.visuals.polygon.b, 0, 255, 1)
+                    TimMenu.SameLine()
+                    Config.visuals.polygon.a = TimMenu.Slider("A", Config.visuals.polygon.a, 0, 255, 1)
                     TimMenu.NextLine()
                 end
+                TimMenu.EndSector()
 
-                -- Line settings
-                Config.visuals.line.enabled = TimMenu.Checkbox("Path Lines", Config.visuals.line.enabled)
+                TimMenu.NextLine()
+
+                -- Path Line Settings (Left Column, Second Row)
+                TimMenu.BeginSector("Path Lines")
+                Config.visuals.line.enabled = TimMenu.Checkbox("Enable Path Lines", Config.visuals.line.enabled)
                 TimMenu.NextLine()
 
                 if Config.visuals.line.enabled then
-                    Config.visuals.line.r = TimMenu.Slider("Line Red", Config.visuals.line.r, 0, 255, 1)
+                    -- Line Colors (compact - 2 sliders per line)
+                    TimMenu.Text("Line Colors:")
+                    Config.visuals.line.r = TimMenu.Slider("R", Config.visuals.line.r, 0, 255, 1)
+                    TimMenu.SameLine()
+                    Config.visuals.line.g = TimMenu.Slider("G", Config.visuals.line.g, 0, 255, 1)
                     TimMenu.NextLine()
-
-                    Config.visuals.line.g = TimMenu.Slider("Line Green", Config.visuals.line.g, 0, 255, 1)
-                    TimMenu.NextLine()
-
-                    Config.visuals.line.b = TimMenu.Slider("Line Blue", Config.visuals.line.b, 0, 255, 1)
-                    TimMenu.NextLine()
-
-                    Config.visuals.line.a = TimMenu.Slider("Line Alpha", Config.visuals.line.a, 0, 255, 1)
+                    Config.visuals.line.b = TimMenu.Slider("B", Config.visuals.line.b, 0, 255, 1)
+                    TimMenu.SameLine()
+                    Config.visuals.line.a = TimMenu.Slider("A", Config.visuals.line.a, 0, 255, 1)
                     TimMenu.NextLine()
                 end
+                TimMenu.EndSector()
+
+                -- Outline Settings (Right Column, Second Row)
+                TimMenu.SameLine()
+                TimMenu.BeginSector("Outline Settings")
+                Config.visuals.outline.line_and_flags = TimMenu.Checkbox("Line & Flags Outline",
+                    Config.visuals.outline.line_and_flags)
+                TimMenu.NextLine()
+
+                Config.visuals.outline.polygon = TimMenu.Checkbox("Polygon Outline", Config.visuals.outline.polygon)
+                TimMenu.NextLine()
+
+                TimMenu.Text("Outline Colors:")
+                Config.visuals.outline.r = TimMenu.Slider("R", Config.visuals.outline.r, 0, 255, 1)
+                TimMenu.SameLine()
+                Config.visuals.outline.g = TimMenu.Slider("G", Config.visuals.outline.g, 0, 255, 1)
+                TimMenu.NextLine()
+                Config.visuals.outline.b = TimMenu.Slider("B", Config.visuals.outline.b, 0, 255, 1)
+                TimMenu.SameLine()
+                Config.visuals.outline.a = TimMenu.Slider("A", Config.visuals.outline.a, 0, 255, 1)
+                TimMenu.NextLine()
+                TimMenu.EndSector()
             end
         end
 
